@@ -1,0 +1,58 @@
+{
+  "name": "@jagreehal/sandbox-node",
+  "version": "0.1.0",
+  "description": "Run npm/pnpm/yarn/bun installs and dev commands in a Docker/Podman sandbox: lifecycle scripts never touch the host, default-deny credentials + egress.",
+  "type": "module",
+  "bin": {
+    "sandbox": "./dist/cli.mjs",
+    "sandbox-node": "./dist/cli.mjs"
+  },
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.mts",
+      "default": "./dist/cli.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "data",
+    "Dockerfile",
+    "proxy",
+    "sandbox.schema.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.5.1",
+  "scripts": {
+    "build": "pnpm gen:schema && tsdown",
+    "gen:schema": "tsx scripts/gen-schema.ts",
+    "dev": "tsx src/cli.ts",
+    "lint": "vp lint",
+    "test": "vitest run",
+    "test:integration": "pnpm build && vitest run -c vitest.integration.config.ts",
+    "test:all": "pnpm test && pnpm test:integration",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.5.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.2",
+    "tsdown": "0.22.1",
+    "tsx": "^4.19.2",
+    "typescript": "6.0.3",
+    "vite-plus": "0.1.24",
+    "vitest": "4.1.8"
+  },
+  "overrides": {
+    "esbuild": "0.28.0"
+  }
+}
