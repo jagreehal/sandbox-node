@@ -2,7 +2,7 @@ import path from 'node:path';
 import { capture, quiet } from './exec.js';
 import { readConfig, type SandboxConfig } from './config.js';
 import { lockfileName, lockfilePresent, resolvePackageManager } from './package-manager.js';
-import { missingAllowHosts, projectRegistryHints, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
+import { registryDiagnostics, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { runtimeVulnerabilities } from './runtime-cve.js';
 
 export interface DoctorOptions {
@@ -70,28 +70,27 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     if (opts.runWorkdir) checks.push({ level: 'info', label: 'package workdir', detail: opts.runWorkdir });
   }
   if (config) {
-    const registry = projectRegistryHints(cwd);
-    if (registry.hosts.length) {
-      const missing = missingAllowHosts(config.egress.allow, registry.hosts);
+    const registry = registryDiagnostics(cwd, config);
+    if (registry.hints.hosts.length) {
       checks.push({
-        level: missing.length ? 'info' : 'ok',
+        level: registry.missingAllowHosts.length ? 'info' : 'ok',
         label: 'registry hosts',
-        detail: missing.length
-          ? `${registry.hosts.join(', ')} (.npmrc; missing from egress.allow: ${missing.join(', ')})`
-          : `${registry.hosts.join(', ')} (.npmrc; covered by egress.allow)`,
-        fixes: missing.length ? [renderAllowCommand(missing), renderAllowlistSnippet(config.egress.allow, missing)] : undefined,
+        detail: registry.missingAllowHosts.length
+          ? `${registry.hints.hosts.join(', ')} (.npmrc; missing from egress.allow: ${registry.missingAllowHosts.join(', ')})`
+          : `${registry.hints.hosts.join(', ')} (.npmrc; covered by egress.allow)`,
+        fixes: registry.missingAllowHosts.length
+          ? [renderAllowCommand(registry.missingAllowHosts), renderAllowlistSnippet(config.egress.allow, registry.missingAllowHosts)]
+          : undefined,
       });
     }
-    if (registry.authEnvNames.length) {
-      const missingEnvGrants = registry.authEnvNames.filter((name) => !config.grants.env.includes(name));
-      const unsetHostEnv = registry.authEnvNames.filter((name) => process.env[name] === undefined);
+    if (registry.hints.authEnvNames.length) {
       checks.push({
-        level: missingEnvGrants.length || unsetHostEnv.length ? 'info' : 'ok',
+        level: registry.missingEnvGrants.length || registry.unsetHostEnv.length ? 'info' : 'ok',
         label: 'registry auth',
-        detail: `${registry.authEnvNames.join(', ')} referenced in .npmrc`,
+        detail: `${registry.hints.authEnvNames.join(', ')} referenced in .npmrc`,
         fixes: [
-          ...(missingEnvGrants.length ? [`add to config: ${JSON.stringify({ grants: { env: [...config.grants.env, ...missingEnvGrants].sort() } })}`] : []),
-          ...(unsetHostEnv.length ? unsetHostEnv.map((name) => `export ${name}=...`) : []),
+          ...(registry.missingEnvGrants.length ? [`add to config: ${JSON.stringify({ grants: { env: [...config.grants.env, ...registry.missingEnvGrants].sort() } })}`] : []),
+          ...(registry.unsetHostEnv.length ? registry.unsetHostEnv.map((name) => `export ${name}=...`) : []),
         ],
       });
     }

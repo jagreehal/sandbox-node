@@ -72,7 +72,8 @@
         "minReleaseAgeDays": 0,
         "minReleaseAgeExclude": [],
         "failOnAdvisory": false,
-        "failOnDeprecated": true
+        "failOnDeprecated": true,
+        "cache": true
       },
       "type": "object",
       "properties": {
@@ -122,6 +123,10 @@
         "failOnDeprecated": {
           "default": true,
           "type": "boolean"
+        },
+        "cache": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "required": [
@@ -132,7 +137,8 @@
         "minReleaseAgeDays",
         "minReleaseAgeExclude",
         "failOnAdvisory",
-        "failOnDeprecated"
+        "failOnDeprecated",
+        "cache"
       ],
       "additionalProperties": false
     },
@@ -196,6 +202,43 @@
         "devPorts"
       ],
       "additionalProperties": false
+    },
+    "build": {
+      "default": {
+        "extraPackages": [],
+        "extraSteps": []
+      },
+      "type": "object",
+      "properties": {
+        "baseImage": {
+          "type": "string"
+        },
+        "nodeVersion": {
+          "type": "string"
+        },
+        "extraPackages": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extraSteps": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "customDockerfileUnsafe": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "extraPackages",
+        "extraSteps"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -203,7 +246,8 @@
     "grants",
     "install",
     "egress",
-    "run"
+    "run",
+    "build"
   ],
   "additionalProperties": false
 }

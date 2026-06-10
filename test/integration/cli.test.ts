@@ -56,7 +56,7 @@ describe('cli (golden, no docker)', () => {
   it('prints help with all commands and globals', async () => {
     const { code, stdout } = await runCli(process.cwd(), ['help']);
     expect(code).toBe(0);
-    for (const token of ['init', 'setup', 'allow', 'preflight', 'doctor', 'build', 'install', 'add', 'run', 'shell', '--config', '--image', '--backend', '--dev', '--full-network', '--frozen', '--risk', '--fail-on-risk', '--json']) {
+    for (const token of ['init', 'setup', 'allow', 'preflight', 'doctor', 'build', 'install', 'add', 'run', 'shell', '--config', '--image', '--backend', '--dev', '--interactive', '--full-network', '--frozen', '--risk', '--fail-on-risk', '--json']) {
       expect(stdout).toContain(token);
     }
   });
@@ -351,7 +351,7 @@ describe('cli (golden, no docker)', () => {
     const { code, stdout } = await runCli(dir, ['--json', 'add', 'is-number']);
     expect(code).toBe(0);
     const plan = JSON.parse(stdout);
-    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', 'is-number']);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'is-number']);
     expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toBeUndefined();
     expect(plan.mounts).toContainEqual({ type: 'volume', target: '/workspace/.github', readonly: true });
   });
@@ -400,7 +400,7 @@ describe('cli (golden, no docker)', () => {
     const { code, stdout } = await runCli(dir, ['--json', 'pnpm', 'add', 'zod']);
     expect(code).toBe(0);
     const plan = JSON.parse(stdout);
-    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', 'zod']);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'zod']);
     expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toBeUndefined(); // writable manifest
   });
 
@@ -413,6 +413,71 @@ describe('cli (golden, no docker)', () => {
     expect(plan.interactive).toBe(true);
   });
 
+  it('pass-through: `npm audit fix` maps to the install-class audit-fix model', async () => {
+    const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'npm', 'audit', 'fix', '--package-lock-only']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
+    expect(plan.argv).toEqual(['npm', 'audit', 'fix', '--package-lock-only']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.workdir).toBe('/workspace');
+    expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toBeUndefined();
+  });
+
+  it('pass-through: `pnpm audit --fix=update` honours the named pm and stays install-class', async () => {
+    const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'pnpm', 'audit', '--fix=update', '--prod']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'audit', '--fix=update', '--prod']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.interactive).toBe(false);
+  });
+
+  it('pass-through: `npm audit` uses registry egress but keeps the whole tree read-only', async () => {
+    const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'npm', 'audit', '--json']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
+    expect(plan.argv).toEqual(['npm', 'audit', '--json']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.mounts).toContainEqual({ type: 'bind', source: '<cwd>', target: '/workspace', readonly: true });
+  });
+
+  it('pass-through: `npm audit signatures` uses registry egress with protected persistence mounts', async () => {
+    const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'npm', 'audit', 'signatures', '--json']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
+    expect(plan.argv).toEqual(['npm', 'audit', 'signatures', '--json']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.mounts).toContainEqual({ type: 'bind', source: '<cwd>/package.json', target: '/workspace/package.json', readonly: true });
+    expect(plan.mounts).toContainEqual({ type: 'volume', target: '/workspace/.github', readonly: true });
+  });
+
+  it('pass-through: `pnpm audit signatures` honours the named pm and stays read-only to the manifest', async () => {
+    const dir = fixture({ 'pnpm-lock.yaml': '', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'pnpm', 'audit', 'signatures']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'audit', 'signatures']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toMatchObject({ readonly: true });
+    expect(plan.interactive).toBe(false);
+  });
+
+  it('audit-fix preflight gates the incoming vulnerable direct dependency versions before running', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'x', dependencies: { 'old-lib': '^2.0.0' } }),
+      'package-lock.json': JSON.stringify({ lockfileVersion: 3, packages: { '': { dependencies: { 'old-lib': '^2.0.0' } }, 'node_modules/old-lib': { version: '2.0.0' } } }),
+    });
+    await withRegistry(deprecatedRegistry, async (url) => {
+      const { code, stderr } = await runCli(dir, ['npm', 'audit', 'fix'], { SANDBOX_NPM_REGISTRY: url });
+      expect(code).toBe(1);
+      expect(stderr).toContain('old-lib@2.0.0 — deprecated: no longer maintained');
+    });
+  });
+
   it('init --preset writes a valid config (and won’t clobber without --force)', async () => {
     const dir = fixture({});
     const first = await runCli(dir, ['init', '--preset', 'strict']);
@@ -420,7 +485,7 @@ describe('cli (golden, no docker)', () => {
     expect(first.stdout).toContain('sandbox: wrote sandbox.config.json using the strict preset');
     expect(first.stdout).toContain('sandbox npm install');
     const cfg = JSON.parse(readFileSync(path.join(dir, 'sandbox.config.json'), 'utf8'));
-    expect(cfg.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true });
+    expect(cfg.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true });
     expect(cfg.run.network).toBe('none');
 
     const clobber = await runCli(dir, ['init', '--preset', 'trusted']);

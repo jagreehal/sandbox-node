@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ProjectFacts } from '../src/project.js';
-import { checkReleaseAge, checkReleaseAgeDeep, collectRiskHints, createRegistryClient, execPackageTargets, isExcluded, parsePackageTargets, readAllPackagesFromLockfile, readDirectVersionsFromLockfile, REGISTRY_TIMEOUT_MS, releaseAgeViolations, resolveRiskTargets, riskTargetsForInstall, suggestAgedVersion, type RegistryClient, type ResolvedTarget } from '../src/risk.js';
+import { checkReleaseAge, checkReleaseAgeDeep, collectRiskHints, createRegistryClient, execPackageTargets, isExcluded, parsePackageTargets, readAllPackagesFromLockfile, readDirectVersionsFromLockfile, REGISTRY_TIMEOUT_MS, releaseAgeViolations, resolveRiskTargets, riskTargetsForInstall, riskTargetsForUpdate, suggestAgedVersion, type RegistryClient, type ResolvedTarget } from '../src/risk.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -30,6 +30,37 @@ function facts(cwd: string, pm: ProjectFacts['pm'], directDependencies: ProjectF
     envFileValues: {},
   };
 }
+
+describe('riskTargetsForUpdate', () => {
+  const deps = [
+    { name: 'lodash', spec: '^4.17.0' },
+    { name: 'react', spec: '~18.2.0' },
+    { name: 'ui', spec: 'workspace:*' }, // non-registry — must be dropped
+  ];
+  const f = (d = deps) => facts('/x', 'npm', d);
+
+  it('gates each direct dep against its RANGE so the registry resolves the incoming (newest-in-range) version', () => {
+    expect(riskTargetsForUpdate(f(), [], false)).toEqual([
+      { name: 'lodash', spec: '^4.17.0' },
+      { name: 'react', spec: '~18.2.0' },
+    ]); // `ui` (workspace:) dropped
+  });
+
+  it('--latest resolves against the dist-tag latest (empty spec), since it bumps past the range', () => {
+    expect(riskTargetsForUpdate(f(), [], true)).toEqual([
+      { name: 'lodash', spec: '' },
+      { name: 'react', spec: '' },
+    ]);
+  });
+
+  it('a named update restricts the gate to those packages', () => {
+    expect(riskTargetsForUpdate(f(), ['react'], false)).toEqual([{ name: 'react', spec: '~18.2.0' }]);
+  });
+
+  it('returns nothing when there are no registry-resolvable direct deps', () => {
+    expect(riskTargetsForUpdate(facts('/x', 'npm', [{ name: 'ui', spec: 'workspace:*' }]), [], false)).toEqual([]);
+  });
+});
 
 const packuments: Record<string, unknown> = {
   sharp: {

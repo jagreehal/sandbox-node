@@ -1,11 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const CLI = path.join(ROOT, 'dist', 'cli.js');
+const ROOT = process.cwd();
+function resolveCli(): string {
+  const esm = path.join(ROOT, 'dist', 'cli.mjs');
+  return existsSync(esm) ? esm : path.join(ROOT, 'dist', 'cli.js');
+}
+
+export const CLI = resolveCli();
 export const PACKAGE_ROOT = ROOT;
 
 export interface CliResult {
@@ -17,7 +21,7 @@ export interface CliResult {
 /** Run the built CLI in `cwd` and capture its output. */
 export function runCli(cwd: string, args: string[], env: Record<string, string> = {}): Promise<CliResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], {
+    const child = spawn(process.execPath, [resolveCli(), ...args], {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],

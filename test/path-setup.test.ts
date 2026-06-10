@@ -1,0 +1,134 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { routePassthrough } from '../src/dispatch.js';
+import {
+  applyBlock,
+  blockState,
+  detectShell,
+  FETCH_RUN_VERBS,
+  installPath,
+  rcFileFor,
+  removeBlock,
+  renderManagedBlock,
+  renderWrapperBody,
+  statusPath,
+  uninstallPath,
+  WRAP_VERBS,
+} from '../src/path-setup.js';
+import type { PackageManager } from '../src/package-manager.js';
+
+describe('detectShell', () => {
+  it('reads the shell from $SHELL, falling back to bash (posix) / pwsh (win)', () => {
+    expect(detectShell({ SHELL: '/usr/bin/zsh' })).toBe('zsh');
+    expect(detectShell({ SHELL: '/bin/bash' })).toBe('bash');
+    expect(detectShell({ SHELL: '/opt/homebrew/bin/fish' })).toBe('fish');
+    expect(detectShell({}, 'win32')).toBe('pwsh');
+    expect(detectShell({}, 'linux')).toBe('bash');
+  });
+});
+
+describe('rcFileFor', () => {
+  it('maps each shell to its rc file (pwsh is print-only)', () => {
+    expect(rcFileFor('zsh', '/home/d')).toBe('/home/d/.zshrc');
+    expect(rcFileFor('bash', '/home/d')).toBe('/home/d/.bashrc');
+    expect(rcFileFor('fish', '/home/d')).toBe('/home/d/.config/fish/config.fish');
+    expect(rcFileFor('pwsh', '/home/d')).toBeUndefined();
+  });
+});
+
+describe('wrapper / dispatch consistency', () => {
+  // Every verb the shell wrapper redirects MUST be an install-class (mutating) route in the
+  // real router — otherwise the wrapper would sandbox something `sandbox <pm>` treats as a plain
+  // host command. This fails if dispatch's verb sets and WRAP_VERBS ever drift apart.
+  const MUTATING = new Set(['install', 'add', 'update', 'auditFix']);
+  it('only redirects verbs the router treats as install-class', () => {
+    for (const pm of Object.keys(WRAP_VERBS) as PackageManager[]) {
+      for (const verb of WRAP_VERBS[pm]) {
+        const route = routePassthrough([pm, verb]);
+        expect(route, `${pm} ${verb}`).toBeDefined();
+        expect(MUTATING.has(route!.model), `${pm} ${verb} → ${route!.model}`).toBe(true);
+      }
+    }
+  });
+
+  it('does NOT redirect read-only / run verbs (those stay on the host tool)', () => {
+    const body = renderWrapperBody('bash');
+    // The wrapper passes these straight through; they must not appear as redirected case patterns.
+    expect(body).not.toContain('"npm ls"');
+    expect(body).not.toContain('"npm publish"');
+    expect(body).not.toContain('"npm run"');
+  });
+
+  it('covers the fetch-and-run surface dispatch knows about (dlx/exec → run model)', () => {
+    // The reviewer gap: `pnpm dlx`, `yarn dlx`, `npm exec` are fetch-and-run too. The router routes
+    // them to `run`; the wrapper must redirect them so the habit-guard isn't silently partial.
+    for (const verb of FETCH_RUN_VERBS) {
+      expect(routePassthrough(['pnpm', verb, 'some-tool'])?.model, `pnpm ${verb}`).toBe('run');
+    }
+    for (const shell of ['bash', 'fish', 'pwsh'] as const) {
+      const body = renderWrapperBody(shell);
+      for (const verb of FETCH_RUN_VERBS) expect(body, `${shell}:${verb}`).toContain(verb);
+      // pnpx is wrapped as a standalone runner alongside npx/bunx.
+      expect(body, `${shell}:pnpx`).toContain('pnpx');
+    }
+  });
+});
+
+describe('managed block install/update/remove', () => {
+  const home = () => mkdtempSync(path.join(tmpdir(), 'sbx-path-'));
+
+  it('installs the block into a fresh rc and reports it', () => {
+    const dir = home();
+    const res = installPath({ shell: 'zsh', homedir: dir });
+    const text = readFileSync(res.file!, 'utf8');
+    expect(blockState(text)).toBe('current');
+    expect(text).toContain('__sandbox_pm');
+    expect(statusPath({ shell: 'zsh', homedir: dir }).messages[0]).toMatch(/installed and current/);
+  });
+
+  it('is idempotent — re-running updates in place without duplicating', () => {
+    const dir = home();
+    installPath({ shell: 'zsh', homedir: dir });
+    const res = installPath({ shell: 'zsh', homedir: dir });
+    const text = readFileSync(res.file!, 'utf8');
+    expect(text.match(/__sandbox_pm\(\)/g)?.length).toBe(1);
+  });
+
+  it('preserves surrounding rc content on install and restores it on uninstall', () => {
+    const dir = home();
+    const file = path.join(dir, '.zshrc');
+    writeFileSync(file, 'export EDITOR=vim\nalias g=git\n');
+    installPath({ shell: 'zsh', homedir: dir });
+    expect(readFileSync(file, 'utf8')).toContain('alias g=git');
+    uninstallPath({ shell: 'zsh', homedir: dir });
+    const after = readFileSync(file, 'utf8');
+    expect(after).toContain('alias g=git');
+    expect(after).not.toContain('__sandbox_pm');
+    expect(blockState(after)).toBe('absent');
+  });
+
+  it('detects a stale (older-version) block', () => {
+    const stale = renderManagedBlock('zsh').replace('# sandbox-path-version: 1', '# sandbox-path-version: 0');
+    expect(blockState(stale)).toBe('stale');
+  });
+
+  it('print mode and pwsh return the snippet without touching disk', () => {
+    const printed = installPath({ shell: 'bash', print: true });
+    expect(printed.file).toBeUndefined();
+    expect(printed.snippet).toContain('__sandbox_pm');
+    const pwsh = installPath({ shell: 'pwsh' });
+    expect(pwsh.file).toBeUndefined();
+    expect(pwsh.snippet).toContain('__Sandbox-Pm');
+  });
+});
+
+describe('applyBlock / removeBlock primitives', () => {
+  it('appends with a clean separator and round-trips to empty', () => {
+    const block = renderManagedBlock('bash');
+    const applied = applyBlock('', block);
+    expect(applied.endsWith('\n')).toBe(true);
+    expect(removeBlock(applied).includes('__sandbox_pm')).toBe(false);
+  });
+});

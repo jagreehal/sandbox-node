@@ -1,0 +1,141 @@
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import type { SandboxConfig } from './config.js';
+
+/**
+ * The base image the bundled Dockerfile builds `FROM` when nothing overrides it.
+ * Kept in sync with the `ARG NODE_BASE=` default in the Dockerfile — the build-arg
+ * is what actually swaps it, this constant is how the rest of the code recognises
+ * "the user customised the base" (so it can warn / rebuild / annotate).
+ */
+export const DEFAULT_BASE_IMAGE = 'node:24-bookworm-slim';
+
+/** Markers a full-replacement Dockerfile must keep, or the boundary it promises is hollow. */
+const REQUIRED_MARKERS: { needle: string; missing: string }[] = [
+  { needle: 'sbx-net-guard', missing: "the metadata guard (sbx-net-guard) — 'on'/full-network mode will NOT blackhole cloud metadata (169.254.169.254)" },
+  { needle: 'libcap2-bin', missing: 'libcap2-bin — the guard cannot drop Linux capabilities before your command runs' },
+  { needle: 'corepack', missing: 'corepack — pnpm/yarn will try to download at run time and fail under the no-network/allowlist phases' },
+];
+
+/**
+ * Everything `backend` needs to build the sandbox image for one invocation. Derived
+ * from `config.build` so the build path stays a pure function of config (testable),
+ * and so {@link isCustomBuild} can tell the default fast-path from a customised one.
+ */
+export interface BuildSpec {
+  /** Final image tag the run will use. */
+  tag: string;
+  /** Resolved `FROM` for the bundled Dockerfile (passed as the `NODE_BASE` build-arg). */
+  baseImage: string;
+  /** Extra apt packages layered on top of the security base. */
+  extraPackages: string[];
+  /** Raw Dockerfile instructions (RUN/ENV/COPY…) layered on top of the security base. */
+  extraSteps: string[];
+  /**
+   * Docker build context for the extra-steps layer — the project root. `COPY`/`ADD` paths in
+   * {@link extraSteps} resolve against this, so they can pull files from your repo into the image.
+   */
+  buildContext: string;
+  /** Absolute path to a user-supplied Dockerfile that fully replaces the bundled one. */
+  customDockerfile?: string;
+}
+
+/** `baseImage` wins; else derive from `nodeVersion`; else the bundled default. */
+export function resolveBaseImage(build: SandboxConfig['build']): string {
+  if (build.baseImage) return build.baseImage;
+  if (build.nodeVersion) return `node:${build.nodeVersion}-bookworm-slim`;
+  return DEFAULT_BASE_IMAGE;
+}
+
+/**
+ * Turn `config.build` + the resolved image tag into a {@link BuildSpec}. `contextDir` is the
+ * project root — the build context for `COPY`/`ADD` in `extraSteps`. Pure.
+ */
+export function resolveBuildSpec(config: SandboxConfig, tag: string, contextDir: string): BuildSpec {
+  const b = config.build;
+  return {
+    tag,
+    baseImage: resolveBaseImage(b),
+    extraPackages: b.extraPackages,
+    extraSteps: b.extraSteps,
+    buildContext: contextDir,
+    customDockerfile: b.customDockerfileUnsafe ? path.resolve(b.customDockerfileUnsafe) : undefined,
+  };
+}
+
+/** Image label that records which build spec produced an image (drives rebuild-on-change). */
+export const SPEC_LABEL = 'dev.sandbox-node.spec';
+
+/**
+ * Stable fingerprint of everything that affects the built image: base, extra packages/steps,
+ * and — for the custom path — the Dockerfile's path AND its current contents. Stamped onto the
+ * image as {@link SPEC_LABEL} so a config (or custom-Dockerfile) change forces a rebuild instead
+ * of silently reusing a stale tag.
+ */
+export function specFingerprint(spec: BuildSpec): string {
+  const custom = spec.customDockerfile;
+  const material = JSON.stringify({
+    base: spec.baseImage,
+    pkgs: spec.extraPackages,
+    steps: spec.extraSteps,
+    custom: custom ?? null,
+    customContent: custom && existsSync(custom) ? readFileSync(custom, 'utf8') : null,
+  });
+  return createHash('sha256').update(material).digest('hex').slice(0, 16);
+}
+
+/** True when the spec departs from the bundled default in any way (drives rebuilds + banners). */
+export function isCustomBuild(spec: BuildSpec): boolean {
+  return (
+    spec.baseImage !== DEFAULT_BASE_IMAGE ||
+    spec.extraPackages.length > 0 ||
+    spec.extraSteps.length > 0 ||
+    spec.customDockerfile !== undefined
+  );
+}
+
+/** True when extras must be layered on top of the built security base (vs a single build). */
+export function hasExtraLayer(spec: BuildSpec): boolean {
+  return spec.extraPackages.length > 0 || spec.extraSteps.length > 0;
+}
+
+/**
+ * True when any extra step is a `COPY`/`ADD`, so the derived build needs the project root as its
+ * context. Without one, the build uses a throwaway temp context instead of shipping the whole repo
+ * (incl. node_modules) to the daemon — the fast path for `extraPackages`-only or `RUN`/`ENV` extras.
+ */
+export function extraStepsNeedRepoContext(extraSteps: string[]): boolean {
+  return extraSteps.some((step) => /^\s*(COPY|ADD)\b/i.test(step));
+}
+
+/**
+ * The thin Dockerfile that layers a user's extras ON TOP of the already-built security
+ * base (`baseTag`). Because the security layers are baked into `baseTag`, extras can only
+ * add — they can't quietly drop the metadata guard or the capability tooling.
+ */
+export function derivedDockerfile(baseTag: string, spec: BuildSpec): string {
+  const lines = [`FROM ${baseTag}`];
+  if (spec.extraPackages.length) {
+    lines.push(
+      '# build.extraPackages',
+      `RUN apt-get update && apt-get install -y --no-install-recommends \\`,
+      `      ${spec.extraPackages.join(' ')} \\`,
+      '  && rm -rf /var/lib/apt/lists/*',
+    );
+  }
+  if (spec.extraSteps.length) {
+    lines.push('# build.extraSteps', ...spec.extraSteps);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Scan a full-replacement Dockerfile for the security layers the sandbox relies on.
+ * Anything missing is returned as a loud warning — the run still proceeds (the user
+ * opted in via `customDockerfileUnsafe`), but they're told exactly which guarantee
+ * they just dropped.
+ */
+export function customDockerfileWarnings(content: string): string[] {
+  return REQUIRED_MARKERS.filter((m) => !content.includes(m.needle)).map((m) => `custom Dockerfile is missing ${m.missing}`);
+}

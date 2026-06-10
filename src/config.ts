@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -59,9 +60,14 @@ export const SandboxConfigSchema = z
         // never resolve to one. On by default; `--allow-deprecated` overrides for one run. Rides
         // on riskHints (the same registry resolve), so `--risk off` also disables it.
         failOnDeprecated: z.boolean().default(true),
+        // Persist the package manager's download cache in a named container volume across runs, so
+        // repeated installs don't re-fetch every tarball — speed keeps people from routing around
+        // the sandbox. Ergonomic, not a boundary: the install container is still throwaway; only
+        // the integrity-checked cache survives. Set false for a fully cold, hermetic install.
+        cache: z.boolean().default(true),
       })
       .strict()
-      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, failOnDeprecated: true }),
+      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, failOnDeprecated: true, cache: true }),
     egress: z
       .object({ allow: z.array(z.string()).default(['npmjs.org', 'npmjs.com']) })
       .strict()
@@ -77,6 +83,30 @@ export const SandboxConfigSchema = z
       })
       .strict()
       .default({ network: 'none', ports: [], devPorts: false }),
+    build: z
+      // How the sandbox image is built. The bundled Dockerfile owns the security layers
+      // (metadata guard, capability tooling, corepack); these knobs let a project pin the
+      // base or layer extras on top WITHOUT replacing those layers. `customDockerfileUnsafe`
+      // is the escape hatch that does replace them — and the only one that voids the boundary.
+      .object({
+        // Full `repo:tag[@digest]` for the image the Dockerfile builds FROM. Overrides nodeVersion.
+        baseImage: z.string().optional(),
+        // Convenience: build FROM `node:<nodeVersion>-bookworm-slim`. Ignored when baseImage is set.
+        nodeVersion: z.string().optional(),
+        // Extra apt packages installed on top of the security base.
+        extraPackages: z.array(z.string()).default([]),
+        // Extra raw Dockerfile instructions (RUN/ENV/COPY…) layered on top of the security base.
+        // COPY/ADD paths resolve against your PROJECT ROOT (the build context), so they can pull
+        // files from the repo into the image. Editing a COPY'd file won't auto-rebuild — run `sandbox build`.
+        extraSteps: z.array(z.string()).default([]),
+        // Replace the bundled Dockerfile entirely with this file. ADVANCED: the sandbox can no
+        // longer guarantee its boundary (metadata guard, dropped caps, isolation) — you own it.
+        // Named `…Unsafe` on purpose, warns loudly on every run, and a personal layer setting it
+        // is always flagged. Prefer baseImage / extraPackages / extraSteps.
+        customDockerfileUnsafe: z.string().optional(),
+      })
+      .strict()
+      .default({ extraPackages: [], extraSteps: [] }),
   })
   .strict();
 
@@ -147,29 +177,167 @@ function dropNoteKeys(value: unknown): unknown {
   return value;
 }
 
-/**
- * Load and validate `sandbox.config.json` (or `configPath`). Supports JSONC
- * comments. A missing file is valid — every field has a safe default. Unknown
- * keys are rejected so typos surface instead of silently doing nothing.
- */
-export function readConfig(cwd: string, configPath?: string): SandboxConfig {
-  const file = configPath ?? path.join(cwd, 'sandbox.config.json');
-  let raw: unknown = {};
-  if (existsSync(file)) {
-    try {
-      raw = JSON.parse(stripJsonComments(readFileSync(file, 'utf8')));
-    } catch (e) {
-      throw new Error(`sandbox: invalid JSON in ${file}: ${(e as Error).message}`);
-    }
+/** Where each config layer comes from, lowest precedence first. */
+export type ConfigScope = 'user' | 'project' | 'local';
+
+export interface LoadedConfig {
+  config: SandboxConfig;
+  /** Boundary fields a personal layer (user/local) loosened beyond the committed team config. */
+  warnings: string[];
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Deep-merge raw config objects: objects merge recursively; arrays and scalars replace. */
+function mergeRaw(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const prev = out[k];
+    out[k] = isPlainObject(prev) && isPlainObject(v) ? mergeRaw(prev, v) : v;
   }
-  const parsed = SandboxConfigSchema.safeParse(dropNoteKeys(raw));
+  return out;
+}
+
+/**
+ * Resolve a layer's relative `build.customDockerfileUnsafe` against the directory of the file
+ * that DECLARED it — not the process cwd. A path written in `~/.config/sandbox-node/config.json`
+ * or a `--config /elsewhere/sandbox.config.json` must mean "relative to that file", and survive
+ * being run from any directory. Absolute paths pass through unchanged. Mutates the raw layer.
+ */
+function resolveLayerBuildPath(raw: Record<string, unknown>, layerDir: string): void {
+  const build = raw.build;
+  if (isPlainObject(build) && typeof build.customDockerfileUnsafe === 'string' && build.customDockerfileUnsafe) {
+    build.customDockerfileUnsafe = path.resolve(layerDir, build.customDockerfileUnsafe);
+  }
+}
+
+/** Read one config file as a raw object (JSONC + note-keys stripped). Missing file → undefined. */
+function readRaw(file: string): Record<string, unknown> | undefined {
+  if (!existsSync(file)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonComments(readFileSync(file, 'utf8')));
+  } catch (e) {
+    throw new Error(`sandbox: invalid JSON in ${file}: ${(e as Error).message}`);
+  }
+  const clean = dropNoteKeys(parsed);
+  if (!isPlainObject(clean)) throw new Error(`sandbox: ${file} must contain a JSON object`);
+  resolveLayerBuildPath(clean, path.dirname(file));
+  return clean;
+}
+
+/** The per-user global config: `$XDG_CONFIG_HOME/sandbox-node/config.json` (or `~/.config/…`). */
+export function userConfigPath(): string {
+  const base = process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config');
+  return path.join(base, 'sandbox-node', 'config.json');
+}
+
+/** Filename of the personal, git-ignored override that sits beside a project config. */
+export const LOCAL_CONFIG_NAME = 'sandbox.config.local.json';
+
+/** Sibling personal override of a project config: `sandbox.config.local.json` (git-ignored). */
+export function localConfigPath(projectFile: string): string {
+  return path.join(path.dirname(projectFile), LOCAL_CONFIG_NAME);
+}
+
+function parseConfig(raw: Record<string, unknown>, label: string): SandboxConfig {
+  const parsed = SandboxConfigSchema.safeParse(raw);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
-      .join('\n');
-    throw new Error(`sandbox: invalid config (${file}):\n${issues}`);
+    const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
+    throw new Error(`sandbox: invalid config (${label}):\n${issues}`);
   }
   return parsed.data;
+}
+
+const NET_RANK: Record<NetworkMode, number> = { none: 0, allowlist: 1, on: 2 };
+const CLAUDE_RANK = { none: 0, project: 1, home: 2 } as const;
+
+/**
+ * Warn when the effective config is LOOSER than the committed (team) baseline — i.e. a
+ * personal layer (user-global or `*.local.json`) widened the boundary. Tightening is silent;
+ * only loosening is flagged, because that's the un-reviewed change that matters for a sandbox.
+ *
+ * NOTE: the set of boundary fields lives here AND in `SandboxConfigSchema` — when you add a
+ * security-relevant field to the schema, add its loosening check here too, or it won't be caught.
+ */
+function boundaryLooseningWarnings(eff: SandboxConfig, base: SandboxConfig): string[] {
+  const w: string[] = [];
+  const added = (a: string[], b: string[]) => a.filter((x) => !b.includes(x));
+  if (NET_RANK[eff.install.network] > NET_RANK[base.install.network]) w.push(`install.network widened to '${eff.install.network}' (team config: '${base.install.network}')`);
+  if (NET_RANK[eff.run.network] > NET_RANK[base.run.network]) w.push(`run.network widened to '${eff.run.network}' (team config: '${base.run.network}')`);
+  const egress = added(eff.egress.allow, base.egress.allow);
+  if (egress.length) w.push(`egress.allow added ${egress.join(', ')} beyond team config`);
+  if (eff.grants['ssh-agent'] && !base.grants['ssh-agent']) w.push('grants.ssh-agent enabled beyond team config');
+  if (CLAUDE_RANK[eff.grants.claude] > CLAUDE_RANK[base.grants.claude]) w.push(`grants.claude widened to '${eff.grants.claude}' (team config: '${base.grants.claude}')`);
+  for (const key of ['paths', 'env', 'envFiles'] as const) {
+    const extra = added(eff.grants[key], base.grants[key]);
+    if (extra.length) w.push(`grants.${key} added ${extra.join(', ')} beyond team config`);
+  }
+  if (!eff.install.frozen && base.install.frozen) w.push('install.frozen disabled (team config requires reproducible installs)');
+  for (const flag of ['failOnRisk', 'failOnAdvisory', 'failOnDeprecated'] as const) {
+    if (!eff.install[flag] && base.install[flag]) w.push(`install.${flag} disabled beyond team config`);
+  }
+  if (eff.install.minReleaseAgeDays < base.install.minReleaseAgeDays) w.push(`install.minReleaseAgeDays lowered to ${eff.install.minReleaseAgeDays} (team config: ${base.install.minReleaseAgeDays})`);
+  if (eff.build.customDockerfileUnsafe && !base.build.customDockerfileUnsafe) w.push('build.customDockerfileUnsafe set by a personal layer — the sandbox boundary is no longer verified');
+  return w;
+}
+
+/**
+ * Load `sandbox.config.json` and its override layers, lowest precedence first:
+ *
+ *   1. user-global  `$XDG_CONFIG_HOME/sandbox-node/config.json`  (personal, cross-project)
+ *   2. project/team `sandbox.config.json`                        (committed, reviewed)
+ *   3. local        `sandbox.config.local.json`                  (personal, git-ignored)
+ *
+ * Layers are deep-merged as raw JSON then validated ONCE, so defaults apply to the composite
+ * and unknown keys still surface as typos. A personal layer that loosens the boundary beyond
+ * the committed config is reported in `warnings` (not blocked) — tighten freely, loosen loudly.
+ */
+export function loadConfig(cwd: string, configPath?: string): LoadedConfig {
+  const projectFile = configPath ?? path.join(cwd, 'sandbox.config.json');
+  const sources: { scope: ConfigScope; source: string }[] = [
+    { scope: 'user', source: userConfigPath() },
+    { scope: 'project', source: projectFile },
+    { scope: 'local', source: localConfigPath(projectFile) },
+  ];
+
+  let merged: Record<string, unknown> = {};
+  let committed: Record<string, unknown> = {}; // defaults + project only: the trusted baseline
+  let hasPersonalLayer = false;
+  for (const { scope, source } of sources) {
+    const raw = readRaw(source);
+    if (!raw) continue;
+    merged = mergeRaw(merged, raw);
+    if (scope === 'project') committed = mergeRaw(committed, raw);
+    else hasPersonalLayer = true;
+  }
+
+  const config = parseConfig(merged, projectFile);
+  const warnings = hasPersonalLayer ? boundaryLooseningWarnings(config, parseConfig(committed, projectFile)) : [];
+  return { config, warnings };
+}
+
+/**
+ * Load and validate the effective config (all layers merged). A missing file is valid —
+ * every field has a safe default. Use {@link loadConfig} when you also need the layer
+ * provenance or the boundary-loosening warnings.
+ */
+export function readConfig(cwd: string, configPath?: string): SandboxConfig {
+  return loadConfig(cwd, configPath).config;
+}
+
+/**
+ * The committed (team) baseline: schema defaults + the PROJECT layer ONLY — never the user-global
+ * or `*.local.json` personal layers. Use this when WRITING back to the shared `sandbox.config.json`
+ * (e.g. `sandbox allow`): writing the *merged* effective config would bake a teammate's personal
+ * override (a loosened network, an extra grant) into the committed file. Reading project-only keeps
+ * `allow` an additive edit to exactly what's already committed.
+ */
+export function readCommittedConfig(cwd: string, configPath?: string): SandboxConfig {
+  const projectFile = configPath ?? path.join(cwd, 'sandbox.config.json');
+  return parseConfig(readRaw(projectFile) ?? {}, projectFile);
 }
 
 /** Write a normalized config file with the shipped JSON Schema ref. */

@@ -1,4 +1,7 @@
-FROM node:24-bookworm-slim
+# NODE_BASE lets `build.baseImage` / `build.nodeVersion` swap the base without editing this
+# file (passed as a --build-arg). Keep the default in sync with DEFAULT_BASE_IMAGE in image.ts.
+ARG NODE_BASE=node:24-bookworm-slim
+FROM ${NODE_BASE}
 
 # Native-build toolchain so node-gyp / binding.gyp dependencies compile INSIDE
 # the sandbox (the exact vector behind the 2026-06-04 Miasma incident). The point

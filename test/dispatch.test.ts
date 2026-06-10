@@ -41,6 +41,53 @@ describe('routePassthrough — add', () => {
   });
 });
 
+describe('routePassthrough — update', () => {
+  it('routes the update family to the gated update model, per package manager', () => {
+    expect(route('npm update')).toEqual({ model: 'update', pm: 'npm', verb: 'update', args: [] });
+    expect(route('npm up')).toEqual({ model: 'update', pm: 'npm', verb: 'up', args: [] });
+    expect(route('pnpm update')).toEqual({ model: 'update', pm: 'pnpm', verb: 'update', args: [] });
+    expect(route('pnpm up')).toEqual({ model: 'update', pm: 'pnpm', verb: 'up', args: [] });
+    expect(route('yarn upgrade')).toEqual({ model: 'update', pm: 'yarn', verb: 'upgrade', args: [] });
+    expect(route('yarn up')).toEqual({ model: 'update', pm: 'yarn', verb: 'up', args: [] });
+    expect(route('bun update')).toEqual({ model: 'update', pm: 'bun', verb: 'update', args: [] });
+  });
+
+  it('carries named packages and flags as args (preserving the verb)', () => {
+    expect(route('npm update lodash react')).toEqual({ model: 'update', pm: 'npm', verb: 'update', args: ['lodash', 'react'] });
+    expect(route('pnpm up --latest')).toEqual({ model: 'update', pm: 'pnpm', verb: 'up', args: ['--latest'] });
+  });
+
+  it('does NOT treat `bun upgrade` as a package update — it upgrades the bun binary, so it stays a run', () => {
+    expect(route('bun upgrade')).toEqual({ model: 'run', argv: ['bun', 'upgrade'] });
+  });
+});
+
+describe('routePassthrough — audit fix', () => {
+  it('routes npm audit fix and pnpm audit --fix to the install-class audit-fix model', () => {
+    expect(route('npm audit fix')).toEqual({ model: 'auditFix', pm: 'npm', fixToken: 'fix', args: [] });
+    expect(route('npm audit fix --force')).toEqual({ model: 'auditFix', pm: 'npm', fixToken: 'fix', args: ['--force'] });
+    expect(route('pnpm audit --fix')).toEqual({ model: 'auditFix', pm: 'pnpm', fixToken: '--fix', args: [] });
+    expect(route('pnpm audit --prod --fix')).toEqual({ model: 'auditFix', pm: 'pnpm', fixToken: '--fix', args: ['--prod'] });
+    expect(route('pnpm audit --fix=update --interactive')).toEqual({ model: 'auditFix', pm: 'pnpm', fixToken: '--fix=update', args: ['--interactive'] });
+  });
+
+  it('routes report-only audit to the read-only audit model (it needs the registry, installs nothing)', () => {
+    expect(route('npm audit')).toEqual({ model: 'audit', argv: ['npm', 'audit'] });
+    expect(route('pnpm audit')).toEqual({ model: 'audit', argv: ['pnpm', 'audit'] });
+    expect(route('yarn audit')).toEqual({ model: 'audit', argv: ['yarn', 'audit'] });
+    expect(route('bun audit --prod')).toEqual({ model: 'audit', argv: ['bun', 'audit', '--prod'] });
+  });
+
+  it('leaves yarn berry’s `yarn npm audit` as a plain run (the verb is `npm`, not `audit`)', () => {
+    expect(route('yarn npm audit --all')).toEqual({ model: 'run', argv: ['yarn', 'npm', 'audit', '--all'] });
+  });
+
+  it('routes `audit signatures` (npm/pnpm) to its own read-only verification model', () => {
+    expect(route('npm audit signatures')).toEqual({ model: 'auditSignatures', pm: 'npm', args: [] });
+    expect(route('pnpm audit signatures')).toEqual({ model: 'auditSignatures', pm: 'pnpm', args: [] });
+  });
+});
+
 describe('routePassthrough — run', () => {
   it('routes scripts and tools verbatim', () => {
     expect(route('npm run dev')).toEqual({ model: 'run', argv: ['npm', 'run', 'dev'] });
@@ -76,6 +123,7 @@ describe('routePassthrough — bun', () => {
 
 describe('routePassthrough — not a pass-through', () => {
   it('returns undefined for unrecognized leaders and empty input', () => {
+    expect(route('claude')).toBeUndefined();
     expect(route('frobnicate the widgets')).toBeUndefined();
     expect(route('')).toBeUndefined();
   });

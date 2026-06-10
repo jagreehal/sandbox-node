@@ -5,6 +5,7 @@ import type { RunPlan } from '../src/plan.js';
 function plan(overrides: Partial<RunPlan> = {}): RunPlan {
   return {
     image: 'node-install-sandbox:latest',
+    build: { tag: 'node-install-sandbox:latest', baseImage: 'node:24-bookworm-slim', extraPackages: [], extraSteps: [], buildContext: '/Users/you/app' },
     argv: ['npm', 'install'],
     env: { SANDBOX: '1', CI: '', HOME: '/root' },
     mounts: [
