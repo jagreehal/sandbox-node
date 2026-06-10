@@ -2,8 +2,11 @@
 import path from 'node:path';
 import { createBackend } from './backend.js';
 import type { SandboxConfig } from './config.js';
-import { readConfig } from './config.js';
+import { loadConfig, readConfig } from './config.js';
 import { resolveProjectContext } from './context.js';
+import { renderBadge } from './badge.js';
+import { resolveBuildSpec } from './image.js';
+import { runVerify } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
 import { routePassthrough, type Route } from './dispatch.js';
@@ -11,13 +14,15 @@ import { runDoctor } from './doctor.js';
 import { execute } from './index.js';
 import { runInit } from './init.js';
 import { log } from './log.js';
-import { lockfileName, type PackageManager } from './package-manager.js';
-import { planAdd, planInstall, planRun, type PlanOptions, type RunPlan } from './plan.js';
+import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv, type PackageManager } from './package-manager.js';
+import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
 import { probeProject, type ProjectFacts } from './project.js';
-import { allowHosts } from './registry.js';
+import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
+import { detectShell, installPath, SHELLS, statusPath, uninstallPath, type PathActionResult, type Shell } from './path-setup.js';
 import { type AdvisoryHit } from './advisory.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
-import { execPackageTargets, parsePackageTargets, riskTargetsForInstall, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
+import { execPackageTargets, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
+import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
 import { runSetup } from './setup.js';
 
 interface Globals {
@@ -40,6 +45,8 @@ interface Globals {
   allowRecent: string[];
   /** Gate the whole resolved tree from the lockfile, not just direct deps. */
   deep: boolean;
+  /** Local TTY mode: prompt before widening the boundary after a block. */
+  interactive: boolean;
   /** Block on a known-malware advisory (overrides config). */
   failOnAdvisory?: boolean;
   /** Allow installing a maintainer-deprecated version for this run (overrides the default block). */
@@ -55,11 +62,16 @@ Usage: sandbox [globals] <command> [args]
 Just add "sandbox" in front — same commands, fewer secrets exposed:
   sandbox setup --vibe         one-button setup for vibe/dev work
   sandbox npm install          install deps in the sandbox (lifecycle scripts contained)
-  sandbox pnpm add zod         add a dependency
+  sandbox pnpm add zod         add a dependency (saved exact by default)
+  sandbox npm update           update deps — gated + sandboxed like install (pnpm up / yarn upgrade too)
+  sandbox npm audit fix        remediate vulnerabilities under install-class isolation
+  sandbox npm audit signatures verify registry signatures/provenance for installed packages
   sandbox npm run dev          run a script (dev server, tests, build, …)
   sandbox npx vite             run a one-off tool
-Works with npm, pnpm, yarn, and bun — install/ci/add and any run/exec script. Your SSH keys,
-npm token, cloud creds, and editor/agent state stay out unless you grant them.
+Works with npm, pnpm, yarn, and bun — install/ci/add/update, npm audit fix, pnpm audit --fix,
+report-only audit commands, \`npm audit signatures\`, \`pnpm audit signatures\`, and any run/exec
+script. Your SSH keys, npm token, cloud creds, and editor/agent state stay out unless you grant
+them.
 
 Sandbox commands:
   init [--preset N]    create sandbox.config.json from a preset (interactive picker,
@@ -67,12 +79,20 @@ Sandbox commands:
   setup [--preset N]   one-button onboarding: write config if needed, check backend,
                        build images if needed, then print the next commands
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
+  path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
+                       npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically —
+                       the human equivalent of the agent hook. Bypass once with 'command npm ...'
+                       or a whole shell with SANDBOX_OFF=1. (shell functions, not a PATH change)
   preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
                        command would pull, print every finding (+ a pin suggestion per blocked
                        package), and exit non-zero exactly when that install would be blocked.
                        e.g. sandbox --min-release-age 7 --fail-on-advisory preflight npm install
   doctor               check config, package manager, backend, daemon, and image state
   build                build (or rebuild) the sandbox + egress-proxy images
+  verify               exit non-zero unless this repo commits a real sandbox boundary and
+                       no personal layer has loosened it — the CI gate behind the badge
+  badge [--workflow F] print a markdown "sandboxed" badge. Bare = static provenance badge;
+                       --workflow sandbox.yml = the CI-backed verified badge (--repo to override)
   devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
                        (per-session) form of the same policy: run the agent + editor INSIDE
                        the jail, with the same egress allowlist. Add --force to overwrite.
@@ -81,7 +101,8 @@ Expert (explicit) commands — same models the pass-through maps onto:
   install [pm-args]    install deps. Persistence paths (.git/.github/.husky/.claude/…)
                        and package.json are read-only; root stays writable. No host
                        creds. Egress default-deny (allowlist: registry only).
-  add <pkg...>         add dependency(ies) — the only command that writes package.json
+  add <pkg...>         add dependency(ies) — the only command that writes package.json,
+                       and saves them as exact versions by default
   run -- <cmd...>      run a command in the container (network: none by default)
   shell                interactive shell in the container
 
@@ -110,6 +131,9 @@ Globals (before the command):
   --deep               extend the blocking gates (release-age, deprecated, and malware when
                        --fail-on-advisory is set) to the whole resolved tree (transitive),
                        read from the lockfile (npm + pnpm + yarn), not just direct deps
+  --interactive        local TTY mode: when egress is blocked, show what each host is and
+                       prompt to allow once, save for the team (sandbox.config.json), save just
+                       for you (sandbox.config.local.json), or retry once with full network
   --fail-on-advisory   BLOCK when a version is flagged as malware in the OSV advisory DB
                        (the strict preset sets this)
   --allow-deprecated   allow installing a maintainer-DEPRECATED version (off by default:
@@ -139,6 +163,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     dryRun: false,
     allowRecent: [],
     deep: false,
+    interactive: false,
   };
   let i = 0;
   for (; i < argv.length; i++) {
@@ -166,6 +191,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
       globals.minReleaseAge = n;
     } else if (a === '--allow-recent') globals.allowRecent.push(argv[++i] ?? '');
     else if (a === '--deep') globals.deep = true;
+    else if (a === '--interactive' || a === '--prompt') globals.interactive = true;
     else if (a === '--fail-on-advisory') globals.failOnAdvisory = true;
     else if (a === '--allow-deprecated') globals.failOnDeprecated = false;
     else break;
@@ -253,6 +279,14 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
     }
     case 'add':
       return planAdd(config, { ...facts, pm: route.pm }, route.pkgs, opts);
+    case 'update':
+      return planUpdate(config, { ...facts, pm: route.pm }, pmUpdateArgv(route.pm, route.verb, route.args), opts);
+    case 'auditFix':
+      return planAuditFix(config, { ...facts, pm: route.pm }, pmAuditFixArgv(route.pm, route.fixToken, route.args), opts);
+    case 'audit':
+      return planAudit(config, facts, route.argv, opts);
+    case 'auditSignatures':
+      return planAuditSignatures(config, { ...facts, pm: route.pm }, pmAuditSignaturesArgv(route.pm, route.args), opts);
     case 'run':
       return planRun(config, facts, route.argv, opts);
   }
@@ -303,6 +337,16 @@ function riskTargetsForRoute(route: Route, facts: ProjectFacts): RiskTarget[] {
       const named = parsePackageTargets(route.args);
       return named.length ? named : riskTargetsForInstall(facts);
     }
+    case 'update': {
+      const latest = route.args.some((a) => a === '--latest' || a === '-L');
+      const names = parsePackageTargets(route.args).map((t) => t.name);
+      return riskTargetsForUpdate({ ...facts, pm: route.pm }, names, latest);
+    }
+    case 'auditFix':
+      return riskTargetsForUpdate({ ...facts, pm: route.pm }, parsePackageTargets(route.args).map((t) => t.name), false);
+    case 'audit':
+    case 'auditSignatures':
+      return []; // read-only verification: installs nothing, so there's no supply-chain surface to gate
     case 'run':
       return execPackageTargets(route.argv);
   }
@@ -359,7 +403,7 @@ function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route): A
   const failOnAdvisory = globals.failOnAdvisory ?? config.install.failOnAdvisory;
   const failOnDeprecated = globals.failOnDeprecated ?? config.install.failOnDeprecated;
   const failOnRisk = globals.failOnRisk ?? config.install.failOnRisk;
-  const deep = globals.deep && (route.model === 'install' || route.model === 'add');
+  const deep = globals.deep && (route.model === 'install' || route.model === 'add' || route.model === 'update' || route.model === 'auditFix');
   return {
     riskHints,
     minReleaseAgeDays,
@@ -571,11 +615,28 @@ async function main(): Promise<number> {
     });
   }
 
+  if (cmd === 'verify') {
+    return runVerify(context.rootDir, context.configPath);
+  }
+
+  if (cmd === 'badge') {
+    let workflow: string | undefined;
+    let slug: string | undefined;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--workflow') workflow = args[++i];
+      else if (args[i] === '--repo') slug = args[++i];
+    }
+    console.log(renderBadge(context.rootDir, { workflow, slug }));
+    return 0;
+  }
+
   const backend = createBackend(globals.backend);
 
   if (cmd === 'build') {
-    const config = readConfig(context.rootDir, context.configPath);
-    return backend.buildImages(globals.image ?? config.image);
+    const loaded = loadConfig(context.rootDir, context.configPath);
+    for (const warning of loaded.warnings) log.warn(warning);
+    const tag = globals.image ?? loaded.config.image;
+    return backend.buildImages(resolveBuildSpec(loaded.config, tag, context.rootDir));
   }
 
   if (cmd === 'doctor') {
@@ -622,7 +683,39 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const config = applyOneOffModes(readConfig(context.rootDir, context.configPath), globals);
+  if (cmd === 'path') {
+    const action = args.find((a) => !a.startsWith('-')) ?? 'install';
+    const shellIdx = args.indexOf('--shell');
+    const shellArg = shellIdx >= 0 ? args[shellIdx + 1] : undefined;
+    if (shellArg !== undefined && !SHELLS.includes(shellArg as Shell)) fail(`unknown --shell '${shellArg}' (use: ${SHELLS.join(' | ')})`);
+    const shell: Shell = (shellArg as Shell | undefined) ?? detectShell();
+    const print = args.includes('--print');
+    let result: PathActionResult;
+    switch (action) {
+      case 'install':
+        result = installPath({ shell, print });
+        break;
+      case 'print':
+        result = installPath({ shell, print: true });
+        break;
+      case 'uninstall':
+      case 'remove':
+        result = uninstallPath({ shell });
+        break;
+      case 'status':
+        result = statusPath({ shell });
+        break;
+      default:
+        fail('usage: sandbox path <install|uninstall|status|print> [--shell zsh|bash|fish|pwsh] [--print]');
+    }
+    for (const m of result.messages) console.log(m);
+    if (result.snippet) console.log(`\n${result.snippet}\n`);
+    return 0;
+  }
+
+  const loaded = loadConfig(context.rootDir, context.configPath);
+  for (const warning of loaded.warnings) log.warn(warning);
+  const config = applyOneOffModes(loaded.config, globals);
   const facts = probeProject(context.rootDir, config, {
     envFiles: globals.envFiles.filter(Boolean),
     envFileBaseDir: context.cwd,
@@ -632,16 +725,37 @@ async function main(): Promise<number> {
   if (globals.image) opts.image = globals.image;
   if (globals.frozen) opts.frozen = true;
 
-  const emit = (plan: RunPlan): Promise<number> => {
+  const emit = async (initialPlan: RunPlan): Promise<number> => {
+    let plan = initialPlan;
     if (globals.dryRun) {
       console.log(renderPlanSummary(plan));
-      return Promise.resolve(0);
+      return 0;
     }
     if (globals.json) {
       console.log(JSON.stringify(redactPlanEnv(plan), null, 2));
-      return Promise.resolve(0);
+      return 0;
     }
-    return execute(plan, backend, { failOnEgress: globals.failOnEgress });
+    const canPrompt = canPromptInteractively(globals.interactive);
+    if (globals.interactive && !canPrompt) log.info('--interactive requested, but no TTY is attached — continuing non-interactively');
+    // The project's own registry hosts (from .npmrc) so the prompt can label them as expected.
+    const registryHosts = projectRegistryHints(context.rootDir).hosts;
+    for (;;) {
+      const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress });
+      if (!result.deniedHosts.length || !canPrompt) return result.code;
+      const deniedHosts = [...new Set(result.deniedHosts)].sort();
+      const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });
+      if (choice === 'cancel') return 1;
+      if (choice === 'allow-project') {
+        const r = allowHosts(context.rootDir, deniedHosts, context.configPath);
+        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (team) — retrying`);
+      } else if (choice === 'allow-local') {
+        const r = allowHostsLocal(context.rootDir, deniedHosts, context.configPath);
+        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (personal, git-ignored) — retrying`);
+      }
+      const retry = nextPlanForBlockedEgressChoice(plan, deniedHosts, choice);
+      if (!retry) return result.code;
+      plan = retry;
+    }
   };
 
   if (cmd === 'preflight') {

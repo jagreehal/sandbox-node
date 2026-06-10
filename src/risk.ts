@@ -216,6 +216,27 @@ export function parsePackageTargets(tokens: string[]): RiskTarget[] {
   return out;
 }
 
+/**
+ * The versions an UPDATE would pull — the supply-chain surface to gate. Unlike install (which
+ * resolves to the locked, already-vetted versions), update is checked against each dep's RANGE so
+ * the registry resolves the *newest in-range* version — exactly what the update will install — and
+ * the age/OSV/deprecation gates run on that incoming version. `--latest`/`-L` bumps past the range,
+ * so those resolve against the dist-tag latest instead. `names` restricts to a named subset; empty
+ * means all direct deps. Non-registry specs (workspace:/file:/git/url) are dropped by `splitNameAndSpec`.
+ */
+export function riskTargetsForUpdate(facts: ProjectFacts, names: string[], latest: boolean): RiskTarget[] {
+  const only = new Set(names.map((n) => splitNameAndSpec(n)?.name).filter((n): n is string => Boolean(n)));
+  return facts.directDependencies
+    .filter((dep) => only.size === 0 || only.has(dep.name))
+    .flatMap((dep) => {
+      // Validate against the REAL spec first so workspace:/file:/git/url deps are dropped — `--latest`
+      // blanks the spec, which would otherwise resurrect a workspace package as a bare registry name.
+      const target = splitNameAndSpec(`${dep.name}@${dep.spec}`);
+      if (!target) return [];
+      return [latest ? { name: target.name, spec: '' } : target];
+    });
+}
+
 export function riskTargetsForInstall(facts: ProjectFacts): RiskTarget[] {
   const exactVersions = readDirectVersionsFromLockfile(facts.cwd, facts.pm);
   return facts.directDependencies

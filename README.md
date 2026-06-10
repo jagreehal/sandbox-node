@@ -30,14 +30,30 @@ cloud credentials, or editor/agent state unless you explicitly grant it.
 ```bash
 sandbox setup --vibe         # one-button setup
 sandbox npm install          # install deps — lifecycle scripts are contained
-sandbox pnpm add zod         # add a dependency
+sandbox pnpm add zod         # add a dependency (saved exact by default)
 sandbox npm run dev          # run a dev server, tests, a build, …
 sandbox npx vite             # one-off tools too
 ```
 
-Works with **npm, pnpm, yarn, and bun** (`install` / `ci` / `add` and any run/exec script), plus
-runners like `npx`, `bunx`, `node`, `tsx`, and `vite`. Install scripts still work; your secrets
-just aren't there to steal.
+Works with **npm, pnpm, yarn, and bun** (`install` / `ci` / `add` / `update` / `audit fix` and any
+run/exec script), plus runners like `npx`, `bunx`, `node`, `tsx`, and `vite`. Install scripts still
+work; your secrets just aren't there to steal.
+
+Anything that pulls *new* versions is gated the same way as install — the release-age cooldown, OSV
+malware check, and risk hints resolve against the versions the command would pull, so a
+freshly-published malicious bump is caught before it's fetched:
+
+- `sandbox npm update` (and `pnpm up`, `yarn upgrade`, `bun update`) — update existing deps within range.
+- `sandbox npm audit fix` (and `pnpm audit --fix`) — remediate vulnerabilities by pulling fixed
+  versions. (Yarn and bun have no in-place audit-fix command.)
+
+Two commands stay intentionally narrow: `bun upgrade` upgrades the bun *binary*, not your packages,
+and `yarn npm audit` stays a plain run command because its verb is `npm`, not `audit`.
+
+Vulnerability remediation is install-class too: `sandbox npm audit fix` and `sandbox pnpm audit --fix`
+run under the same isolation and gating as install/update. Read-only advisory/signature checks such
+as `sandbox npm audit`, `sandbox bun audit`, `sandbox npm audit signatures`, and
+`sandbox pnpm audit signatures` use registry-only egress with read-only project mounts.
 
 ## Cloning a random repo? Letting an agent install packages?
 
@@ -74,8 +90,8 @@ To contain the agent's whole blast radius, run it inside a generated devcontaine
 > This tool takes a different tack — run installs where there's nothing ambient to steal.
 
 This is **install-time containment, not a general sandbox.** `sandbox npm install` is a
-transparent prefix: under the hood it maps to the same install / add / run containment models
-as the explicit `sandbox install` / `add` / `run` commands (kept as expert and CI forms). It's the
+transparent prefix: under the hood it maps to the same install / add / update / run containment
+models as the explicit `sandbox install` / `add` / `run` commands (kept as expert and CI forms). It's the
 Node member of a `sandbox-*` family (a `sandbox-python` could follow, owning `pip`/`uv`).
 
 Here is the real attack these worms run, and the three independent places `sandbox` cuts it:
@@ -109,7 +125,7 @@ would harvest your `~/.npmrc` and `~/.aws/credentials`. See [Quick Start](#quick
 ## Protected by default
 
 - **Credentials** — no `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
-- **Persistence** — `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.cursor`, `.gemini`,
+- **Persistence** — `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.claude-sandbox`, `.cursor`, `.gemini`,
   `.vscode`, and `package.json` are read-only, so an install can't plant auto-running hooks.
 - **Egress** — default-deny; install reaches only the registry hosts in `egress.allow`.
 - **Capabilities** — `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
@@ -154,7 +170,7 @@ drives both from one `sandbox.config.json`:
 | | Where the agent runs | Containment | Editor/LSP in jail? | Weight | Use when |
 | --- | --- | --- | --- | --- | --- |
 | **Host + `sandbox`** (default) | host | per-operation (ephemeral) | no (host editor) | light | you trust the agent but not the dependencies |
-| **`sandbox devcontainer init`** | inside the jail | per-session (persistent) | yes | heavy | you want the agent's whole blast radius contained |
+| **`sandbox devcontainer init`** | inside the jail | per-session (persistent) | yes | heavy | you want the agent's whole blast radius contained, all day |
 
 ```mermaid
 flowchart LR
@@ -223,7 +239,7 @@ at the kernel. It composes with this tool rather than competing:
 - **Claude Code's `/sandbox` (Auto-allow):** kernel-enforced filesystem and network walls around
   every command the agent runs, on the host, with no container. Hides `~/.ssh`, `~/.aws`, and the
   rest of your home directory. Turn it on.
-- **`sandbox npm install`:** the install-specific layer on top. `.git`/`.husky`/`.claude` are made
+- **`sandbox npm install`:** the install-specific layer on top. `.git`/`.husky`/`.claude`/`.claude-sandbox` are made
   read-only so a postinstall can't plant an auto-running hook (the OS sandbox leaves the project dir
   writable), plus the contain-don't-block lifecycle model, registry risk hints, and the
   `--fail-on-egress` CI tripwire. It also works with no agent at all (plain terminal, CI), which
@@ -298,6 +314,8 @@ Pass-through (recommended) — put `sandbox` in front of the command you already
   sandbox npm install | pnpm install | yarn | bun install    install deps (contained)
   sandbox npm ci                                      reproducible install (read-only tree)
   sandbox npm install <pkg> | pnpm add <pkg> | bun add <pkg>  add a dependency
+  sandbox npm audit | pnpm audit | yarn audit | bun audit     read-only advisory audit
+  sandbox npm audit signatures | pnpm audit signatures        verify registry signatures / provenance
   sandbox npm run dev | npm test | npx <tool> | bunx <tool>   run a script or one-off tool
 
 Sandbox commands:
@@ -357,9 +375,10 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox init` | Create `sandbox.config.json` from a preset. Interactive picker, or non-interactive with `--preset strict\|balanced\|vibe\|agent\|trusted [--force]` (`--vibe`/`--agent` are shortcuts). |
 | `sandbox setup` | One-button onboarding. Writes `sandbox.config.json` if needed, checks Docker, builds images if needed, then prints the next commands. |
 | `sandbox allow <host...>` | Add host(s) to `egress.allow` for this repo. Use it when a trusted install needs something like `nodejs.org` or a private registry host. |
+| `sandbox path [install\|uninstall\|status\|print]` | Install shell wrappers (zsh/bash/fish/pwsh) so a bare `npm/pnpm/yarn/bun install` and `npx`/`bunx` route through `sandbox` automatically — the human equivalent of the agent hook. Wraps the package-manager front-ends via shell functions (not a `$PATH` change). Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`. See [Make it automatic](#make-it-automatic-sandbox-path-the-human-prefix-guard). |
 | `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
 | `sandbox install [args]` | Expert form of the install model. Most users should use `sandbox npm install`, `sandbox pnpm install`, or `sandbox yarn install`. Persistence paths and `package.json` stay read-only. The project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates. Host credentials stay out. `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. |
-| `sandbox add <pkg...>` | Expert form of the add model. Most users should use `sandbox npm install <pkg>` or `sandbox pnpm add <pkg>`. This model keeps the same isolation as `install` and lets the package manager write `package.json`. |
+| `sandbox add <pkg...>` | Expert form of the add model. Most users should use `sandbox npm install <pkg>` or `sandbox pnpm add <pkg>`. This model keeps the same isolation as `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. |
 | `sandbox run -- <cmd>` | Expert form of the run model. Most users should use `sandbox npm test`, `sandbox npm run dev`, `sandbox npx <tool>`, or similar. `run.network` defaults to `none`. |
 | `sandbox shell` | Run `bash -l` in the container. |
 
@@ -558,6 +577,46 @@ That rule keeps you out of the common trap: host Node trying to execute Linux-bu
 Your editor can still read types from `node_modules`. If you prefer the explicit expert surface,
 `sandbox run -- ...` maps to the same run model, but most users should stick to the pass-through form.
 
+## Make it automatic: `sandbox path` (the human prefix-guard)
+
+Remembering to type `sandbox` on every install is the same problem the [agent hook](#enforce-the-prefix-with-a-hook)
+solves for AI agents — a boundary set once beats a rule you have to remember. `sandbox path` is
+the human-shell equivalent: it installs **shell functions** so a bare `npm install` can't run
+un-sandboxed out of habit.
+
+```bash
+sandbox path install      # write the wrappers into your shell rc (auto-detects zsh/bash/fish)
+sandbox path status       # installed / current / stale / absent
+sandbox path uninstall    # remove them cleanly
+sandbox path print        # print the snippet instead (for `eval` or a manual paste; the pwsh path)
+# --shell zsh|bash|fish|pwsh  to target a shell other than the detected one
+```
+
+Then open a new terminal (or `source ~/.zshrc`). After that, the **install vector** routes
+through the sandbox automatically, while everything else hits the real tool untouched:
+
+| You type | What runs |
+| --- | --- |
+| `npm install`, `pnpm add zod`, `npm ci`, `npm update`, bare `yarn`, `npm audit fix` | **sandboxed** |
+| fetch-and-run: `npx`, `bunx`, `pnpx`, `pnpm dlx`, `yarn dlx`, `npm exec` | **sandboxed** |
+| `npm run dev`, `npm test`, `npm publish`, `npm ls`, `npm audit`, `node app.js` | the real tool, on the host |
+
+It wraps the package-manager **front-ends only** (`npm`/`pnpm`/`yarn`/`bun`/`npx`/`bunx`), never
+`node` itself — running host Node is a separate, deliberate choice. The redirect prints a one-line
+notice to **stderr** (so piped output is untouched), and there are always two escape hatches:
+
+```bash
+command npm install        # bypass the wrapper for one call
+export SANDBOX_OFF=1        # disable the wrappers for the whole shell
+```
+
+It's installed as a clearly-marked, versioned block in your rc file — read it, and `sandbox path
+uninstall` removes exactly that block and nothing else. This is a **convenience guardrail, not a
+containment boundary**: it depends on your interactive shell, so a script that calls `npm` directly,
+or a different shell, won't be wrapped — the real protection is still `sandbox` running the command
+in a container. For unattended/CI enforcement, use [`sandbox verify` + `--frozen --fail-on-egress`](#continuous-integration);
+for agents, the [`--agent` hook](#enforce-the-prefix-with-a-hook).
+
 ## Migration Path
 
 If a repo already has host-built dependencies, reset once and switch over:
@@ -672,6 +731,11 @@ CI is where install-time containment pays off most: it's where untrusted depende
 unattended. The pattern is `--frozen` (reproducible, read-only install) plus `--fail-on-egress`
 (fail the build if install-time code tries to phone home).
 
+**What this means in practice:** if a malicious dependency runs during
+`sandbox --frozen --fail-on-egress npm install`, it should not be able to steal your CI secrets
+unless you explicitly grant them or widen the network. The install runs with an almost-empty
+environment, default-deny egress, and no home-directory credentials mounted in.
+
 **GitHub Actions:**
 
 ```yaml
@@ -728,6 +792,57 @@ to remove it from the tree entirely:
 **Grant the minimum.** Map only the secrets the install needs (`--env NPM_TOKEN`), prefer
 short-lived least-privilege tokens, and keep `egress.allow` as narrow as the install allows. What
 you don't grant, the install can't read; what you don't allow, it can't reach.
+
+So the CI security story is:
+
+- **No grant, no read.** If you do not pass a secret into the sandboxed install, dependency code in
+  the container cannot read it.
+- **No allow, no exfil.** If a host is not in `egress.allow`, install-time code cannot send data to
+  it; `--fail-on-egress` turns that attempted exfiltration into a failed build.
+- **Workspace files still matter.** Anything already in the repo checkout can still be readable
+  inside the install boundary unless it is separately protected. The main CI gotcha is the checkout
+  token written to `.git/config` when `persist-credentials: true` is left on.
+
+## Team setup: commit the boundary, gate it in CI, badge it
+
+Three steps turn "everyone configures their own machine" into one reviewed policy that CI enforces
+and a badge advertises. The pieces reinforce each other: the committed config is the source of
+truth, `sandbox verify` proves it in CI, and the badge links to that proof.
+
+**1. Commit the boundary.** Run `sandbox init` and commit `sandbox.config.json`. Now the boundary
+is one reviewed file — widening egress or adding a credential grant shows up in a PR diff, not in
+some teammate's global npm setup. Personal tweaks go in `sandbox.config.local.json` (auto-`.gitignore`d);
+a personal layer that loosens the committed boundary is [warned on every run](#layered-config-team-shared--personal-override).
+
+**2. Gate it in CI.** `sandbox verify` exits non-zero unless this repo commits a real boundary and
+no personal layer loosened it — so CI is where enforcement actually bites. A dev can skip the
+sandbox locally, but nothing merges without passing through it:
+
+```yaml
+# .github/workflows/sandbox.yml
+name: sandbox
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npx @jagreehal/sandbox-node verify          # the boundary is committed & un-loosened
+      - run: npx @jagreehal/sandbox-node --frozen --fail-on-egress npm install   # …and installs go through it
+```
+
+**3. Badge it.** `sandbox badge` prints a markdown snippet for your README. Bare gives the static
+provenance badge (claims "installs sandboxed" — a workflow fact, never "safe"). `--workflow sandbox.yml`
+gives the **verified** badge: a GitHub Actions status badge that's green only when the job above
+passes, so it links to real evidence instead of asserting trust.
+
+```bash
+sandbox badge                       # static provenance badge
+sandbox badge --workflow sandbox.yml   # CI-backed verified badge (--repo owner/name to override detection)
+```
 
 ## Running A Dev Server
 
@@ -870,13 +985,22 @@ Everything starts off.
     "riskHints": "basic",      // "off" | "basic" (packument-only) | "thorough" (+ network checks)
     "minReleaseAgeDays": 0,    // >0 = block versions published fewer than N days ago
     "minReleaseAgeExclude": [], // ["@myscope/*"] — names exempt from the age gate
-    "failOnAdvisory": false    // true = block versions flagged as malware in OSV
+    "failOnAdvisory": false,   // true = block versions flagged as malware in OSV
+    "cache": true              // persist the PM download cache in a shared volume across runs
+                               // (content-addressed, so it can't be poisoned). false = cold install.
   },
   "egress":  { "allow": ["npmjs.org", "npmjs.com"] },     // default
   "run": {
     "network": "none",         // "none" | "on" | "allowlist"
     "ports": ["3000:3000"],    // exact host:container maps
     "devPorts": false          // publish the common framework dev ports when network != none
+  },
+  "build": {
+    "nodeVersion": "24",       // build FROM node:<v>-bookworm-slim (the bundled default is 24)
+    "baseImage": "",           // full repo:tag[@digest] — overrides nodeVersion when set
+    "extraPackages": [],       // ["ffmpeg"] — apt packages layered ON TOP of the security base
+    "extraSteps": []           // ["ENV FOO=bar"] — raw Dockerfile lines layered on top
+    // "customDockerfileUnsafe": "./My.Dockerfile"  // ADVANCED: replaces the bundled image entirely
   }
 }
 ```
@@ -894,6 +1018,58 @@ VS Code give you autocomplete, enum hints, and red squiggles on typos/invalid va
 `sandbox init` adds the `$schema` line for you. The schema is regenerated on every `build`
 and a unit test fails if the committed file drifts from the zod schema, so they can't diverge.
 For programmatic use, the `SandboxConfig` TypeScript type is exported from the package.
+
+### Layered config: team-shared + personal override
+
+Config merges from three layers, lowest precedence first — so a team commits one boundary and
+individuals tweak ergonomics without editing the shared file:
+
+| Layer | File | Scope | Commit it? |
+| --- | --- | --- | --- |
+| user-global | `$XDG_CONFIG_HOME/sandbox-node/config.json` (or `~/.config/…`) | personal, all projects | n/a |
+| **project / team** | `sandbox.config.json` | the reviewed boundary | **yes** |
+| local | `sandbox.config.local.json` | personal, this project | no (auto-`.gitignore`d) |
+
+Layers deep-merge (objects merge; arrays and scalars replace) and validate **once**, so a typo in
+any layer still fails loudly. Precedence is "most specific wins" for ergonomic fields (`image`,
+ports, dev ports). For **boundary** fields it's asymmetric — any layer may *tighten*, but a personal
+layer that *loosens* past the committed config (widening network, adding egress hosts or credential
+grants, disabling a gate, replacing the Dockerfile) is **warned loudly** on every run:
+
+```text
+sandbox: ⚠ run.network widened to 'on' (team config: 'none')
+sandbox: ⚠ grants.ssh-agent enabled beyond team config
+```
+
+The run still proceeds — *tighten freely, loosen loudly* — but the change is never silent, and the
+personal file can't be committed to quietly widen the boundary for everyone else.
+
+### Customizing the image
+
+`build` lets a project pin the base or add tooling **without** touching the security layers
+(metadata guard, dropped capabilities, corepack) the bundled Dockerfile bakes in:
+
+- `nodeVersion` / `baseImage` — swap what the image is built `FROM` (passed as a build-arg).
+- `extraPackages` / `extraSteps` — layered on top of the *already-built* security base, so they
+  can only **add** to the boundary, never remove it. `COPY`/`ADD` paths in `extraSteps` resolve
+  against your **project root** (the build context), so they can pull files from the repo into the
+  image — e.g. `"extraSteps": ["COPY ./certs/ca.pem /usr/local/share/ca-certificates/ca.crt"]`.
+- `customDockerfileUnsafe` — the escape hatch that replaces the bundled image entirely. The sandbox
+  can no longer verify its own boundary, so it warns on every build and flags any security layer the
+  file dropped. Prefer the additive knobs above. A relative path is resolved against the **config file
+  that declared it** (so a path in a user-global or `--config` file still means what it says).
+
+**Rebuilds.** The resolved spec is stamped on the image as a label, so changing any `build.*` field
+(or the text of a `customDockerfileUnsafe`) **auto-rebuilds** on the next run — the runtime can never
+quietly execute a boundary that differs from your config. The fingerprint tracks *build instructions*,
+not the contents of files those instructions reference, so after editing a file pulled in by `COPY`/`ADD`
+run `sandbox build` to force a rebuild.
+
+`--dry-run` shows the resolved build so you can read it before anything is built:
+
+```text
+  build     base node:22-bookworm-slim · +pkgs ffmpeg · +1 step
+```
 
 ## Security Gradient
 
@@ -943,6 +1119,12 @@ flowchart LR
 - **DNS rebinding isn't a vector.** The proxy filters on the hostname in the `CONNECT` request (an anchored regex), not on a resolved IP it caches. There's no pinned IP to rebind, and each request is a fresh `CONNECT`, so a second lookup to a different IP changes nothing the filter cares about.
 - **UDP and ICMP have no route out either.** The `--internal` network has no gateway, so the no-route-off-box guarantee covers all protocols, not just the TCP the proxy forwards. DNS tunnelling and ICMP exfil have nowhere to go. (This assumes a well-behaved host network stack and no other container attached to that per-run network, which `sandbox` never does.)
 - **The proxy itself runs unprivileged** (`--cap-drop ALL`, `--security-opt no-new-privileges`). It's a plain HTTP/`CONNECT` forwarder with no capability to rewrite routes or pivot, so an allowlisted-but-compromised host can't turn the proxy into an escape.
+- **TLS hostname filtering has a limit.** The proxy allows a `CONNECT` tunnel based on the hostname the client asks for; it does not inspect the encrypted HTTP request inside that tunnel. So the guarantee is "the container can only connect to listed hosts", not "the traffic can only reach a particular application behind that host". If you allow a host that itself proxies arbitrary traffic, the sandbox trusts that host with the bytes.
+
+Read-only registry verification sits in the same threat model. `sandbox npm audit`,
+`sandbox npm audit signatures`, and the pnpm equivalents get registry-only egress plus the
+install-class read-only mounts (`package.json`, `.git`, `.claude`, `.claude-sandbox`, …), because
+they query registry advisory/signing endpoints without needing to mutate the project tree.
 
 **Hosts you may need to add** beyond the default `npmjs.org`/`npmjs.com`:
 
@@ -1005,7 +1187,7 @@ needs one, stamp it on receipt. The shape is stable; new fields may be added, so
 
 The install and add models run untrusted dependency code. This package locks that phase down.
 
-- The tool mounts `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.cursor`, `.gemini`, and `.vscode` read-only.
+- The tool mounts `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.claude-sandbox`, `.cursor`, `.gemini`, and `.vscode` read-only.
 - If one of those paths does not exist, the tool places a read-only volume there so the install cannot create it.
 - `install` keeps `package.json` read-only. `add` lets the package manager write it.
 - The project root stays writable because package managers write temp files and lockfile updates there. `pnpm` in particular fails on a fully read-only root.

@@ -15,7 +15,7 @@ describe('presets', () => {
 
   it('strict is the most locked-down', () => {
     const s = presetConfig('strict');
-    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true });
+    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true, cache: true });
     expect(s.run.network).toBe('none');
     expect(s.grants['ssh-agent']).toBe(false);
   });

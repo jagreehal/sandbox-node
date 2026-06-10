@@ -2,7 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderRunArgs } from '../src/backend.js';
 import { SandboxConfigSchema } from '../src/config.js';
-import { planAdd, planInstall, planRun, type Mount } from '../src/plan.js';
+import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type Mount } from '../src/plan.js';
 import type { ProjectFacts } from '../src/project.js';
 
 const cfg = (over: object = {}) => SandboxConfigSchema.parse(over);
@@ -27,6 +27,106 @@ function facts(over: Partial<ProjectFacts> = {}): ProjectFacts {
 }
 
 const find = (mounts: Mount[], target: string) => mounts.find((m) => m.target === target);
+
+describe('warm cache volume', () => {
+  it('mounts a per-manager named cache volume on install by default', () => {
+    const plan = planInstall(cfg(), facts({ pm: 'npm', hasPackageJson: true }));
+    const cache = find(plan.mounts, '/root/.npm');
+    expect(cache).toMatchObject({ type: 'volume', source: 'sandbox-cache-npm', readonly: false });
+  });
+
+  it('uses the right store path per package manager', () => {
+    expect(find(planInstall(cfg(), facts({ pm: 'pnpm' })).mounts, '/root/.local/share/pnpm/store')?.source).toBe('sandbox-cache-pnpm');
+    expect(find(planInstall(cfg(), facts({ pm: 'bun' })).mounts, '/root/.bun/install/cache')?.source).toBe('sandbox-cache-bun');
+    expect(find(planInstall(cfg(), facts({ pm: 'yarn' })).mounts, '/root/.cache/yarn')?.source).toBe('sandbox-cache-yarn');
+  });
+
+  it('survives a fully read-only frozen tree (cache lives under HOME, not the workspace)', () => {
+    const plan = planInstall(cfg({ install: { frozen: true } }), facts({ pm: 'npm', hasLockfile: true }));
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(true); // tree locked
+    expect(find(plan.mounts, '/root/.npm')?.readonly).toBe(false); // cache still writable
+  });
+
+  it('is omitted when install.cache is off, keeping the plan a faithful record', () => {
+    const plan = planInstall(cfg({ install: { cache: false } }), facts({ pm: 'npm' }));
+    expect(plan.mounts.some((m) => m.type === 'volume' && m.source?.startsWith('sandbox-cache-'))).toBe(false);
+  });
+
+  it('renders a named volume into docker --mount args with source=', () => {
+    const plan = planInstall(cfg(), facts({ pm: 'npm' }));
+    const args = renderRunArgs(plan).join(' ');
+    expect(args).toContain('type=volume,source=sandbox-cache-npm,target=/root/.npm');
+  });
+
+  it('caches the fetch-and-run runners (npx → npm cache, bunx → bun cache)', () => {
+    expect(find(planRun(cfg(), facts(), ['npx', 'cowsay']).mounts, '/root/.npm')?.source).toBe('sandbox-cache-npm');
+    expect(find(planRun(cfg(), facts(), ['bunx', 'cowsay']).mounts, '/root/.bun/install/cache')?.source).toBe('sandbox-cache-bun');
+    expect(find(planRun(cfg(), facts(), ['pnpm', 'dlx', 'cowsay']).mounts, '/root/.local/share/pnpm/store')?.source).toBe('sandbox-cache-pnpm');
+  });
+
+  it('does NOT mount a cache for plain run commands that download nothing', () => {
+    for (const argv of [['npm', 'test'], ['npm', 'run', 'dev'], ['node', 'app.js']]) {
+      const plan = planRun(cfg(), facts(), argv);
+      expect(plan.mounts.some((m) => m.type === 'volume' && m.source?.startsWith('sandbox-cache-')), argv.join(' ')).toBe(false);
+    }
+  });
+
+  it('honours install.cache=false on the runner path too', () => {
+    const plan = planRun(cfg({ install: { cache: false } }), facts(), ['npx', 'cowsay']);
+    expect(plan.mounts.some((m) => m.type === 'volume' && m.source?.startsWith('sandbox-cache-'))).toBe(false);
+  });
+});
+
+describe('planUpdate', () => {
+  it('runs install-class: registry egress (default-deny allowlist), writable manifest, root workdir', () => {
+    const plan = planUpdate(cfg(), facts({ hasPackageJson: true }), ['npm', 'update']);
+    expect(plan.argv).toEqual(['npm', 'update']);
+    expect(plan.network).toBe('allowlist'); // can resolve from the registry, not the open internet
+    expect(plan.workdir).toBe('/workspace');
+    // manifest writable (--save/--latest rewrite ranges; update is a deliberate dep change)
+    expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined();
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(false);
+    expect(plan.interactive).toBe(false);
+  });
+});
+
+describe('planAuditFix', () => {
+  it('runs audit remediation under install-class isolation', () => {
+    const plan = planAuditFix(cfg(), facts({ pm: 'pnpm', hasPackageJson: true }), ['corepack', 'pnpm', 'audit', '--fix=update']);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'audit', '--fix=update']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.workdir).toBe('/workspace');
+    expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined();
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(false);
+    expect(plan.interactive).toBe(false);
+  });
+});
+
+describe('planAudit', () => {
+  it('runs read-only advisory audit with registry egress and a read-only tree', () => {
+    const plan = planAudit(cfg({ grants: { claude: 'project' } }), facts({ hasPackageJson: true }), ['npm', 'audit', '--json']);
+    expect(plan.argv).toEqual(['npm', 'audit', '--json']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.workdir).toBe('/workspace');
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(true);
+    expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined();
+    expect(find(plan.mounts, '/root/.claude')?.readonly).toBe(true);
+    expect(plan.interactive).toBe(false);
+  });
+});
+
+describe('planAuditSignatures', () => {
+  it('runs registry signature verification with allowlisted egress and a read-only tree (same boundary as audit)', () => {
+    const plan = planAuditSignatures(cfg({ grants: { claude: 'project' } }), facts({ pm: 'pnpm', hasPackageJson: true }), ['corepack', 'pnpm', 'audit', 'signatures', '--json']);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'audit', 'signatures', '--json']);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.workdir).toBe('/workspace');
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(true); // whole tree read-only — it writes nothing
+    expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined(); // covered by the read-only root, no separate mount
+    expect(find(plan.mounts, '/root/.claude')?.readonly).toBe(true); // the agent's config stays locked too
+    expect(plan.interactive).toBe(false);
+  });
+});
 
 describe('planInstall', () => {
   it('keeps a writable root but read-only manifest + persistence paths', () => {
@@ -63,6 +163,23 @@ describe('planInstall', () => {
     const plan = planInstall(cfg(), facts(), ['--workspace', 'api']);
     expect(plan.argv).toEqual(['npm', 'install', '--workspace', 'api']);
   });
+
+  it('locks repo-scoped claude state during install-class commands (install/add/update)', () => {
+    const cfgClaude = cfg({ grants: { claude: 'project' } });
+    for (const plan of [
+      planInstall(cfgClaude, facts(), []),
+      planAdd(cfgClaude, facts(), ['zod']),
+      planUpdate(cfgClaude, facts(), ['npm', 'update']),
+    ]) {
+      expect(find(plan.mounts, '/root/.claude')?.readonly).toBe(true); // a postinstall can't edit the agent's config
+      expect(find(plan.mounts, '/workspace/.claude-sandbox')?.readonly).toBe(true);
+    }
+  });
+
+  it('keeps the agent’s claude state writable during a run (it writes its own session)', () => {
+    const plan = planRun(cfg({ grants: { claude: 'project' } }), facts(), ['x']);
+    expect(find(plan.mounts, '/root/.claude')?.readonly).toBe(false);
+  });
 });
 
 describe('planAdd', () => {
@@ -71,7 +188,18 @@ describe('planAdd', () => {
     expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined(); // inherits the writable root
     expect(find(plan.mounts, '/workspace')?.readonly).toBe(false);
     expect(find(plan.mounts, '/workspace/.github')?.readonly).toBe(true);
-    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', 'is-number']);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'is-number']);
+  });
+
+  it('saves exact versions by default for every package manager add path', () => {
+    expect(planAdd(cfg(), facts({ pm: 'npm' }), ['zod']).argv).toEqual(['npm', 'install', '--save-exact', 'zod']);
+    expect(planAdd(cfg(), facts({ pm: 'pnpm' }), ['zod']).argv).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'zod']);
+    expect(planAdd(cfg(), facts({ pm: 'yarn' }), ['zod']).argv).toEqual(['corepack', 'yarn', 'add', '--exact', 'zod']);
+    expect(planAdd(cfg(), facts({ pm: 'bun' }), ['zod']).argv).toEqual(['bun', 'add', '--exact', 'zod']);
+  });
+
+  it('keeps an explicit yarn range modifier instead of forcing exact', () => {
+    expect(planAdd(cfg(), facts({ pm: 'yarn' }), ['--tilde', 'zod']).argv).toEqual(['corepack', 'yarn', 'add', '--tilde', 'zod']);
   });
 });
 

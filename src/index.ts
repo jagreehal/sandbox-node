@@ -37,16 +37,30 @@ export { runSetup, type SetupOptions } from './setup.js';
 export { createBackend, renderRunArgs, type ContainerBackend, type RunOverride } from './backend.js';
 export { EgressError, parseEgressDenials, type EgressHandle } from './egress.js';
 export { createLogger, formatEvent, log, type Logger, type LogLevel } from './log.js';
+export { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress, type BlockedEgressChoice } from './interactive.js';
 export {
   detectRegistryHints,
+  detectEgressHosts,
   allowHosts,
+  allowHostsLocal,
   missingAllowHosts,
   projectRegistryHints,
+  registryDiagnostics,
   renderAllowCommand,
   readProjectNpmrc,
   renderAllowlistSnippet,
   type RegistryHints,
+  type RegistryDiagnostics,
 } from './registry.js';
+export {
+  classifyHost,
+  describeBlockedHosts,
+  renderBlockedHostLines,
+  hostGlyph,
+  type HostCategory,
+  type HostClassification,
+  type DescribeHostsOptions,
+} from './hosts.js';
 export { classifyCommand, snapshotTree, summarizeUnexpectedChanges, type CommandKind, type TreeSnapshot } from './tamper.js';
 export { parseVersion, runtimeVulnerabilities, type RuntimeVuln } from './runtime-cve.js';
 
@@ -79,15 +93,20 @@ export interface ExecuteOptions {
   failOnEgress?: boolean;
 }
 
+export interface ExecuteResult {
+  code: number;
+  deniedHosts: string[];
+}
+
 export async function execute(
   plan: RunPlan,
   backend: ContainerBackend = createBackend('docker'),
   opts: ExecuteOptions = {},
-): Promise<number> {
+): Promise<ExecuteResult> {
   const workspaceRoot = plan.mounts.find((m) => m.type === 'bind' && m.target === '/workspace')?.source;
   const kind = classifyCommand(plan.argv);
   const before = workspaceRoot && kind !== 'other' ? snapshotTree(workspaceRoot) : undefined;
-  await backend.ensureImage(plan.image);
+  await backend.ensureImage(plan.build);
   const policy = networkPolicy(plan.network);
   if (plan.interactive && plan.ports.length) {
     // We can't tap the (inherited) stdio to read the real port, but we publish the
@@ -114,13 +133,13 @@ export async function execute(
           log.info(`Config preview:\n${renderAllowlistSnippet(plan.egressAllow, add)}`);
           log.info('Or run this once with full network (no allowlist): re-run with --full-network');
         }
-        if (opts.failOnEgress) return code === 0 ? 1 : code;
+        if (opts.failOnEgress) return { code: code === 0 ? 1 : code, deniedHosts: denied };
       }
-      return code;
+      return { code, deniedHosts: denied };
     }
     // isolate -> `--network none`; otherwise the default bridge (no explicit --network).
     const network = policy.isolate ? 'none' : undefined;
-    return await backend.runPlan(plan, { network });
+    return { code: await backend.runPlan(plan, { network }), deniedHosts: [] };
   } finally {
     if (workspaceRoot && before && kind !== 'other') {
       const changes = summarizeUnexpectedChanges(before, snapshotTree(workspaceRoot), kind);

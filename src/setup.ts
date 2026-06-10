@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { createBackend } from './backend.js';
+import { createBackend, sandboxImageUpToDate } from './backend.js';
 import { readConfig } from './config.js';
-import { capture, quiet } from './exec.js';
+import { capture } from './exec.js';
+import { resolveBuildSpec } from './image.js';
 import { mergeDetectedEgress, printInitSummary, printUnwiredHookWarning, writeAgentArtifacts, writeSandboxConfig } from './init.js';
 import { PRESET_NAMES, presetConfig, type PresetName } from './presets.js';
 
@@ -69,9 +70,10 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
   }
 
   const image = opts.image ?? config.image;
-  if ((await quiet(opts.backend, ['image', 'inspect', image])) !== 0) {
+  const spec = resolveBuildSpec(config, image, cwd);
+  if (!(await sandboxImageUpToDate(opts.backend, spec))) {
     console.log(`sandbox: building ${image} and the egress proxy image`);
-    const code = await createBackend(opts.backend).buildImages(image);
+    const code = await createBackend(opts.backend).buildImages(spec);
     if (code !== 0) return code;
     console.log('sandbox: images are ready');
   } else {

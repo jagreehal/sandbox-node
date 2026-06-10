@@ -1,10 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { readConfig, writeConfig } from './config.js';
+import { localConfigPath, readCommittedConfig, type SandboxConfig, stripJsonComments, writeConfig } from './config.js';
 
 export interface RegistryHints {
   hosts: string[];
   authEnvNames: string[];
+}
+
+export interface RegistryDiagnostics {
+  hints: RegistryHints;
+  missingAllowHosts: string[];
+  missingEnvGrants: string[];
+  unsetHostEnv: string[];
 }
 
 /**
@@ -64,27 +71,60 @@ export function projectRegistryHints(cwd: string): RegistryHints {
 }
 
 /**
+ * Dependency names that signal a native build at install time. node-gyp downloads Node headers
+ * from `nodejs.org`, and the gyp/prebuild toolchain packages are the load-bearing direct signal;
+ * a `binding.gyp` in the tree is the other. Detecting these lets `init`/`setup` pre-allow
+ * `nodejs.org` so the most common first-run egress failure ("native module can't fetch headers")
+ * doesn't happen at all.
+ */
+const NATIVE_BUILD_DEPS = new Set([
+  'node-gyp',
+  'node-gyp-build',
+  'node-pre-gyp',
+  '@mapbox/node-pre-gyp',
+  'prebuild-install',
+  'prebuildify',
+  'node-addon-api',
+  'nan',
+  'cmake-js',
+]);
+
+/** True when the project's deps or tree indicate a native (node-gyp/prebuild) build on install. */
+function hasNativeBuildIndicators(cwd: string, depNames: string[]): boolean {
+  if (existsSync(path.join(cwd, 'binding.gyp'))) return true;
+  return depNames.some((name) => NATIVE_BUILD_DEPS.has(name));
+}
+
+/**
  * Hosts an install in `cwd` is likely to need beyond the npm registry, so `init`/`setup` can
  * pre-fill `egress.allow` and the first run "just works" instead of failing on a blocked host.
- * Sources: a private/scoped registry in `.npmrc`, and `github.com`/`codeload.github.com` when any
- * dependency is a git/github spec. Native-module hosts (`nodejs.org`) aren't auto-detected; add
- * them with `sandbox allow` if a build needs them.
+ * Sources: a private/scoped registry in `.npmrc`; `github.com`/`codeload.github.com` when any
+ * dependency is a git/github spec; and `nodejs.org` when the project has native-build indicators
+ * (a node-gyp/prebuild dependency or a `binding.gyp`), since node-gyp fetches Node headers from
+ * there. Only these high-confidence, ubiquitous hosts are pre-filled; the long tail of vendor
+ * binary CDNs is surfaced (annotated) by the interactive egress prompt instead of auto-allowed.
  */
 export function detectEgressHosts(cwd: string): string[] {
   const hosts = new Set<string>(projectRegistryHints(cwd).hosts);
   try {
     const pkg = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as Record<string, unknown>;
     const specs: string[] = [];
+    const depNames: string[] = [];
     for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
       const group = pkg[field];
-      if (group && typeof group === 'object') specs.push(...Object.values(group as Record<string, unknown>).filter((v): v is string => typeof v === 'string'));
+      if (group && typeof group === 'object') {
+        depNames.push(...Object.keys(group as Record<string, unknown>));
+        specs.push(...Object.values(group as Record<string, unknown>).filter((v): v is string => typeof v === 'string'));
+      }
     }
     if (specs.some((spec) => /^(github:|git\+|git:)/.test(spec) || spec.includes('github.com'))) {
       hosts.add('github.com');
       hosts.add('codeload.github.com');
     }
+    if (hasNativeBuildIndicators(cwd, depNames)) hosts.add('nodejs.org');
   } catch {
-    // no/invalid package.json — registry hints alone
+    // no/invalid package.json — fall back to registry hints (+ a bare binding.gyp if present)
+    if (existsSync(path.join(cwd, 'binding.gyp'))) hosts.add('nodejs.org');
   }
   return [...hosts].sort();
 }
@@ -94,6 +134,16 @@ export function missingAllowHosts(currentAllow: string[], wantedHosts: string[])
   return [...new Set(wantedHosts)]
     .filter((host) => !allow.has(host.toLowerCase()))
     .sort();
+}
+
+export function registryDiagnostics(cwd: string, config: SandboxConfig, hostEnv: NodeJS.ProcessEnv = process.env): RegistryDiagnostics {
+  const hints = projectRegistryHints(cwd);
+  return {
+    hints,
+    missingAllowHosts: missingAllowHosts(config.egress.allow, hints.hosts),
+    missingEnvGrants: hints.authEnvNames.filter((name) => !config.grants.env.includes(name)),
+    unsetHostEnv: hints.authEnvNames.filter((name) => hostEnv[name] === undefined),
+  };
 }
 
 export function renderAllowCommand(hosts: string[]): string {
@@ -107,10 +157,39 @@ export function renderAllowlistSnippet(currentAllow: string[], addHosts: string[
 
 export function allowHosts(cwd: string, hosts: string[], configPath?: string): { file: string; added: string[]; allow: string[] } {
   const file = configPath ?? path.join(cwd, 'sandbox.config.json');
-  const config = readConfig(cwd, configPath);
+  // Project layer ONLY — never the merged effective config, or a personal user-global/local
+  // override (a loosened network, an extra grant) would be written into the committed team file.
+  const config = readCommittedConfig(cwd, configPath);
   const normalized = hosts.map(hostFrom).filter((host): host is string => Boolean(host));
   const added = missingAllowHosts(config.egress.allow, normalized);
   const allow = [...new Set([...config.egress.allow, ...normalized])].sort();
   writeConfig(file, { ...config, egress: { ...config.egress, allow } });
   return { file, added, allow };
+}
+
+/**
+ * Add hosts to the personal, git-ignored override layer (`sandbox.config.local.json`) instead of
+ * the committed team config — the "allow for me, not everyone" path from the interactive prompt.
+ * Writes a minimal partial (only `egress.allow`, only the hosts this layer adds) so it stays a
+ * small, readable personal delta and never duplicates the whole team allowlist. Other fields the
+ * user already has in their local file are preserved.
+ *
+ * The local file is the sibling of the ACTIVE project config, so pass `configPath` through when the
+ * user ran with `--config <path>` — otherwise the override is written next to the wrong file and
+ * the next run won't load it. Defaults to `<rootDir>/sandbox.config.json`'s sibling.
+ */
+export function allowHostsLocal(rootDir: string, hosts: string[], configPath?: string): { file: string; added: string[] } {
+  const file = localConfigPath(configPath ?? path.join(rootDir, 'sandbox.config.json'));
+  let existing: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    const parsed = JSON.parse(stripJsonComments(readFileSync(file, 'utf8'))) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
+  }
+  const egress = (existing.egress && typeof existing.egress === 'object' ? existing.egress : {}) as { allow?: unknown };
+  const current = Array.isArray(egress.allow) ? (egress.allow as string[]) : [];
+  const normalized = hosts.map(hostFrom).filter((host): host is string => Boolean(host));
+  const added = missingAllowHosts(current, normalized);
+  const allow = [...new Set([...current, ...normalized])].sort();
+  writeFileSync(file, `${JSON.stringify({ ...existing, egress: { ...egress, allow } }, null, 2)}\n`);
+  return { file, added };
 }

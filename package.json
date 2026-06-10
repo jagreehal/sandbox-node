@@ -2,6 +2,8 @@
   "name": "@jagreehal/sandbox-node",
   "version": "0.2.0",
   "description": "Run npm/pnpm/yarn/bun installs and dev commands in a Docker/Podman sandbox: lifecycle scripts never touch the host, default-deny credentials + egress.",
+  "author": "Jag Reehal",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "sandbox": "./dist/cli.mjs",
@@ -43,6 +45,7 @@
     "test:integration": "pnpm build && vitest run -c vitest.integration.config.ts",
     "test:all": "pnpm test && pnpm test:integration",
     "typecheck": "tsc --noEmit",
+    "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish"
   },

@@ -1,8 +1,10 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withEgress, type EgressHandle } from './egress.js';
-import { quiet, run } from './exec.js';
+import { capture, quiet, run } from './exec.js';
+import { customDockerfileWarnings, derivedDockerfile, extraStepsNeedRepoContext, hasExtraLayer, isCustomBuild, specFingerprint, SPEC_LABEL, type BuildSpec } from './image.js';
 import { log } from './log.js';
 import type { RunPlan } from './plan.js';
 
@@ -18,8 +20,8 @@ export interface RunOverride {
 /** A container runtime (docker or podman — their CLIs are arg-compatible here). */
 export interface ContainerBackend {
   readonly bin: string;
-  ensureImage(tag: string): Promise<void>;
-  buildImages(sandboxTag: string): Promise<number>;
+  ensureImage(spec: BuildSpec): Promise<void>;
+  buildImages(spec: BuildSpec): Promise<number>;
   runPlan(plan: RunPlan, override?: RunOverride): Promise<number>;
   withEgress<T>(allow: string[], fn: (handle: EgressHandle) => Promise<T>, onDenials?: (hosts: string[]) => void): Promise<T>;
 }
@@ -55,7 +57,8 @@ export function renderRunArgs(plan: RunPlan, override: RunOverride = {}): string
   for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
   for (const m of plan.mounts) {
     if (m.type === 'volume') {
-      args.push('--mount', `type=volume,target=${m.target}${m.readonly ? ',readonly' : ''}`);
+      const source = m.source ? `source=${m.source},` : '';
+      args.push('--mount', `type=volume,${source}target=${m.target}${m.readonly ? ',readonly' : ''}`);
     } else {
       args.push('-v', `${m.source}:${m.target}${m.readonly ? ':ro' : ''}`);
     }
@@ -68,8 +71,54 @@ export function renderRunArgs(plan: RunPlan, override: RunOverride = {}): string
   return args;
 }
 
+/**
+ * Build the sandbox image for a {@link BuildSpec}. Three paths, in order of trust:
+ *
+ *  - `customDockerfileUnsafe`: build the user's file verbatim. The bundled security layers
+ *    are NOT applied; warn loudly and flag any guard the file dropped.
+ *  - extras present: build the security base (bundled Dockerfile + `NODE_BASE`), then a thin
+ *    derived layer (`FROM base` + extra packages/steps). Extras can only ADD to the boundary.
+ *  - otherwise: a single build of the bundled Dockerfile with the resolved base image.
+ */
+async function buildSandbox(bin: string, spec: BuildSpec): Promise<number> {
+  const root = assetsRoot();
+  // The final image carries the spec fingerprint as a label so ensure/setup can rebuild it when
+  // the resolved spec changes (intermediate `-base` images are unlabelled — they're rebuilt by
+  // the derived build anyway).
+  const label = ['--label', `${SPEC_LABEL}=${specFingerprint(spec)}`];
+  if (spec.customDockerfile) {
+    if (!existsSync(spec.customDockerfile)) throw new Error(`sandbox: build.customDockerfileUnsafe not found: ${spec.customDockerfile}`);
+    log.warn(`build.customDockerfileUnsafe — bundled security layers are NOT applied; you own the boundary (${spec.customDockerfile})`);
+    for (const warning of customDockerfileWarnings(readFileSync(spec.customDockerfile, 'utf8'))) log.warn(warning);
+    return run(bin, ['build', '-t', spec.tag, ...label, '-f', spec.customDockerfile, dirname(spec.customDockerfile)]);
+  }
+  const baseArgs = ['build', '--build-arg', `NODE_BASE=${spec.baseImage}`];
+  if (!hasExtraLayer(spec)) return run(bin, [...baseArgs, ...label, '-t', spec.tag, root]);
+  const baseTag = `${spec.tag}-base`;
+  const baseCode = await run(bin, [...baseArgs, '-t', baseTag, root]);
+  if (baseCode !== 0) return baseCode;
+  // The generated Dockerfile lives in a temp dir (referenced via -f). The build CONTEXT is the
+  // project root ONLY when an extra step COPY/ADDs from it (honour .dockerignore there); otherwise
+  // it's the temp dir, so a RUN/ENV/extraPackages-only build doesn't ship the whole repo.
+  const dir = mkdtempSync(join(tmpdir(), 'sbx-build-'));
+  const dockerfile = join(dir, 'Dockerfile');
+  writeFileSync(dockerfile, derivedDockerfile(baseTag, spec));
+  const context = extraStepsNeedRepoContext(spec.extraSteps) ? spec.buildContext : dir;
+  return run(bin, ['build', '-t', spec.tag, ...label, '-f', dockerfile, context]);
+}
+
+/**
+ * True when an image for {@link spec.tag} already exists AND was built from this exact spec
+ * (its {@link SPEC_LABEL} matches the current fingerprint). A missing image, or one built from a
+ * different base/extras/custom Dockerfile, returns false so callers rebuild instead of running stale.
+ */
+export async function sandboxImageUpToDate(bin: string, spec: BuildSpec): Promise<boolean> {
+  const { code, stdout } = await capture(bin, ['image', 'inspect', spec.tag, '--format', `{{ index .Config.Labels "${SPEC_LABEL}" }}`]);
+  return code === 0 && stdout.trim() === specFingerprint(spec);
+}
+
 export function createBackend(bin: 'docker' | 'podman' = 'docker'): ContainerBackend {
-  const ensure = async (tag: string, contextDir: string) => {
+  const ensureSimple = async (tag: string, contextDir: string) => {
     if ((await quiet(bin, ['image', 'inspect', tag])) === 0) return;
     log.info('building image', { tag });
     const code = await run(bin, ['build', '-t', tag, contextDir]);
@@ -78,16 +127,20 @@ export function createBackend(bin: 'docker' | 'podman' = 'docker'): ContainerBac
 
   return {
     bin,
-    ensureImage: (tag) => ensure(tag, assetsRoot()),
-    buildImages: async (sandboxTag) => {
-      const root = assetsRoot();
-      const a = await run(bin, ['build', '-t', sandboxTag, root]);
-      if (a !== 0) return a;
-      return run(bin, ['build', '-t', PROXY_IMAGE, join(root, 'proxy')]);
+    ensureImage: async (spec) => {
+      if (await sandboxImageUpToDate(bin, spec)) return;
+      log.info('building image', { tag: spec.tag, base: spec.baseImage, custom: isCustomBuild(spec) });
+      const code = await buildSandbox(bin, spec);
+      if (code !== 0) throw new Error(`sandbox: failed to build ${spec.tag}`);
+    },
+    buildImages: async (spec) => {
+      const code = await buildSandbox(bin, spec);
+      if (code !== 0) return code;
+      return run(bin, ['build', '-t', PROXY_IMAGE, join(assetsRoot(), 'proxy')]);
     },
     runPlan: (plan, override) => run(bin, renderRunArgs(plan, override)),
     withEgress: async (allow, fn, onDenials) => {
-      await ensure(PROXY_IMAGE, join(assetsRoot(), 'proxy'));
+      await ensureSimple(PROXY_IMAGE, join(assetsRoot(), 'proxy'));
       return withEgress(bin, PROXY_IMAGE, allow, fn, onDenials);
     },
   };

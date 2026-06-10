@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as p from '@clack/prompts';
-import { writeConfig, type SandboxConfig } from './config.js';
+import { LOCAL_CONFIG_NAME, writeConfig, type SandboxConfig } from './config.js';
 import { installAgentHook, MANUAL_AGENT_SNIPPET, type HookInstall } from './hook.js';
 import { PRESETS, PRESET_NAMES, presetConfig, type PresetName } from './presets.js';
 import { detectEgressHosts, missingAllowHosts } from './registry.js';
@@ -36,7 +36,23 @@ const AGENT_BODY = `When working in this repo:
 /** Write a config object (with a `$schema` ref for editor autocomplete) to cwd. */
 export function writeSandboxConfig(cwd: string, config: SandboxConfig): string {
   const file = path.join(cwd, 'sandbox.config.json');
-  return writeConfig(file, config);
+  const written = writeConfig(file, config);
+  ensureLocalConfigIgnored(cwd); // the personal override is meant to stay out of git
+  return written;
+}
+
+/**
+ * Keep `sandbox.config.local.json` (the personal, loosen-loudly override) out of version
+ * control, so committing it can't silently widen the boundary for the whole team. Idempotent;
+ * creates `.gitignore` if absent. Returns true when it changed the file.
+ */
+export function ensureLocalConfigIgnored(cwd: string): boolean {
+  const file = path.join(cwd, '.gitignore');
+  const body = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  if (body.split(/\r?\n/).some((line) => line.trim() === LOCAL_CONFIG_NAME)) return false;
+  const sep = body === '' || body.endsWith('\n') ? '' : '\n';
+  writeFileSync(file, `${body}${sep}# personal sandbox overrides — do not commit\n${LOCAL_CONFIG_NAME}\n`);
+  return true;
 }
 
 export function writeAgentInstructions(cwd: string): string {
