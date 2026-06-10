@@ -4,6 +4,12 @@
   "description": "Run npm/pnpm/yarn/bun installs and dev commands in a Docker/Podman sandbox: lifecycle scripts never touch the host, default-deny credentials + egress.",
   "author": "Jag Reehal",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jagreehal/sandbox-node.git"
+  },
+  "homepage": "https://github.com/jagreehal/sandbox-node#readme",
+  "bugs": "https://github.com/jagreehal/sandbox-node/issues",
   "type": "module",
   "bin": {
     "sandbox": "./dist/cli.mjs",
