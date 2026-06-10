@@ -183,7 +183,7 @@ export function planAdd(config: SandboxConfig, facts: ProjectFacts, pkgs: string
 
 /** Dev loop: full read-write tree, ports, default no-network. `argv` is your command. */
 export function planRun(config: SandboxConfig, facts: ProjectFacts, argv: string[], opts: PlanOptions = {}): RunPlan {
-  return {
+  const plan: RunPlan = {
     ...commonPlan(config, facts, config.run.network, opts),
     workdir: opts.workdir ?? WORKSPACE_ROOT, // run/shell honour the invocation sub-dir
     argv,
@@ -191,6 +191,10 @@ export function planRun(config: SandboxConfig, facts: ProjectFacts, argv: string
     ports: runPorts(config),
     interactive: true,
   };
+  if (config.run.devPorts && !plan.env.HOST) {
+    plan.env.HOST = '0.0.0.0';
+  }
+  return plan;
 }
 
 /** Ports to publish for a run: the configured list plus, when `devPorts` is set, the

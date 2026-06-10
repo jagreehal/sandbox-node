@@ -46,7 +46,7 @@ interface Globals {
   failOnDeprecated?: boolean;
 }
 
-const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK']);
+const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
 
 const HELP = `sandbox — put it in front of the npm/pnpm/yarn/bun command you already run
 
