@@ -244,31 +244,72 @@ for (const proof of execProofs) {
   }
 }
 
-{
+function assertReactVitePlan() {
+  const installPlan = planCommand('react-vite', ['npm', 'install']);
+  const devPlan = planCommand('react-vite', ['npm', 'run', 'dev']);
+  const problems = [];
+  if (installPlan.network !== 'allowlist') problems.push(`install network=${installPlan.network} (expected allowlist)`);
+  if (!installPlan.egressAllow.includes('npmjs.org')) problems.push('install egress missing npmjs.org');
+  if (devPlan.network !== 'on') problems.push(`dev network=${devPlan.network} (expected on with vibe preset)`);
+  if (devPlan.env.HOST !== '0.0.0.0') problems.push(`dev HOST=${devPlan.env.HOST} (expected 0.0.0.0 for port forwarding)`);
+  if (!devPlan.ports.some((p) => p.startsWith('5173'))) problems.push('dev ports missing 5173 (Vite)');
+  return { devPlan, problems };
+}
+
+function assertReactViteReal() {
+  const cwd = exampleDir('react-vite');
+  cleanRealArtifacts('react-vite');
+  execFileSync('node', [cli, '--risk', 'off', 'npm', 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const problems = [];
+  if (!existsSync(path.join(cwd, 'node_modules', 'react'))) problems.push('react was not installed');
+  if (!existsSync(path.join(cwd, 'node_modules', 'vite'))) problems.push('vite was not installed');
+  return { problems };
+}
+
+// Plan-then-optional-real proof: assert the plan, print a summary, and when --real is set
+// run the proof and report. Counts into the shared checks/failures totals.
+function proofCheck({ label, plan, summary, real: realFn, proof }) {
   checks += 1;
-  const { installPlan, runPlan, problems } = assertWorkspacePlan();
-  const ok = problems.length === 0;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} workspace plan -> install:${installPlan.workdir} run:${runPlan.workdir}`);
-  if (!ok) {
+  const result = plan();
+  if (result.problems.length) {
     failures += 1;
-    for (const problem of problems) console.error(`     ${problem}`);
-  } else if (real) {
-    console.log('     running workspace proof in examples/workspace/apps/web ...');
-    try {
-      const { problems: realProblems } = assertWorkspaceReal();
-      if (realProblems.length) {
-        failures += 1;
-        for (const problem of realProblems) console.error(`     ${problem}`);
-      } else {
-        console.log('     proof: workspace install resolves to root and run stays in the leaf package');
-      }
-    } catch (error) {
+    console.log(`FAIL ${summary(result)}`);
+    for (const p of result.problems) console.error(`     ${p}`);
+    return;
+  }
+  console.log(`ok   ${summary(result)}`);
+  if (!real) return;
+  console.log(`     running ${label} proof ...`);
+  try {
+    const { problems } = realFn();
+    if (problems.length) {
       failures += 1;
-      console.error('     real workspace proof failed');
-      if (error && typeof error === 'object' && 'status' in error) console.error(`     exit status: ${error.status}`);
+      for (const p of problems) console.error(`     ${p}`);
+    } else {
+      console.log(`     proof: ${proof}`);
     }
+  } catch (error) {
+    failures += 1;
+    console.error(`     real ${label} proof failed`);
+    if (error && typeof error === 'object' && 'status' in error) console.error(`     exit status: ${error.status}`);
   }
 }
+
+proofCheck({
+  label: 'react-vite',
+  plan: assertReactVitePlan,
+  summary: ({ devPlan }) => `react-vite plan -> dev network:${devPlan.network} ports:${devPlan.ports.length} host:${devPlan.env.HOST}`,
+  real: assertReactViteReal,
+  proof: 'react-vite install + dev server plan verify HOST=0.0.0.0 and port 5173 forwarding',
+});
+
+proofCheck({
+  label: 'workspace',
+  plan: assertWorkspacePlan,
+  summary: ({ installPlan, runPlan }) => `workspace plan -> install:${installPlan.workdir} run:${runPlan.workdir}`,
+  real: assertWorkspaceReal,
+  proof: 'workspace install resolves to root and run stays in the leaf package',
+});
 
 console.log(failures ? `\n${failures} proof check(s) failed` : `\nall ${checks} proof checks passed`);
 process.exit(failures ? 1 : 0);

@@ -18,12 +18,17 @@ boundary.
 | [`yarn/`](./yarn) | `sandbox yarn install` plans yarn via corepack, with `registry.yarnpkg.com` added because yarn's registry is not npm's |
 | [`bun/`](./bun) | `sandbox bun install` plans the standalone bun binary with the same boundary |
 | [`workspace/`](./workspace) | install runs at the workspace root while `run` stays in the package dir you invoked from |
+| [`react-vite/`](./react-vite) | dev server with HMR: `sandbox npm run dev` forwards port 5173, `HOST=0.0.0.0` auto-set by the sandbox so the container-bound dev server is reachable from the host |
 
 Each folder is a tiny project with:
 
 - one real registry dependency (`is-odd`) so the package manager has to fetch normally
 - one local dependency (`./bad-dep`) whose `postinstall` probe fails if it can
   see host creds, create `.github/`, or reach `https://example.com`
+
+> The [`react-vite/`](./react-vite) example uses a different pattern: it depends on real
+> packages (`react`, `vite`) and proves the dev-server path — `HOST=0.0.0.0` binding,
+> port 5173 forwarding, and HMR injection.
 
 Put `sandbox` in front of the command you already know:
 
@@ -43,6 +48,8 @@ sandbox bun install        # bun runs in the sandbox; your secrets stay on the h
 - fetch-and-run commands (`npx`/`dlx`/`bunx`) stay on the `run` model by default, so they
   have **no network** until you deliberately widen it
 - workspace installs resolve to the repo root while `run` stays in the leaf package dir
+- the React+Vite dev server plan sets `HOST=0.0.0.0` so the container-bound server is reachable
+  from the host, and port 5173 is forwarded
 
 This is fast and needs no container runtime:
 
@@ -63,6 +70,8 @@ passes only if:
   mode and succeeds with the seeded lockfile
 - fetch-and-run commands work once you deliberately opt into run networking
 - from a workspace package, install happens at the root but `run` executes in the package dir
+- the React+Vite example installs React and Vite through the sandbox, and the dev server
+  is reachable on `http://localhost:5173` with HMR active
 
 ```bash
 node examples/run.mjs --real
