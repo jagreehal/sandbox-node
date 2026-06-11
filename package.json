@@ -30,6 +30,7 @@
     "dist",
     "data",
     "Dockerfile",
+    "net-guard.sh",
     "proxy",
     "sandbox.schema.json",
     "README.md"

@@ -1,6 +1,9 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { createBackend, sandboxImageUpToDate } from './backend.js';
 import { capture, quiet } from './exec.js';
 import { readConfig, type SandboxConfig } from './config.js';
+import { resolveBuildSpec } from './image.js';
 import { lockfileName, lockfilePresent, resolvePackageManager } from './package-manager.js';
 import { registryDiagnostics, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { runtimeVulnerabilities } from './runtime-cve.js';
@@ -11,13 +14,31 @@ export interface DoctorOptions {
   backend: 'docker' | 'podman';
   invocationCwd?: string;
   runWorkdir?: string;
+  /** Run the safe auto-fixes (currently: rebuild an absent/stale image) instead of only reporting. */
+  fix?: boolean;
 }
 
-interface Check {
+/** The fixes `doctor --fix` is allowed to run on its own — deliberately only the non-destructive ones. */
+export type AutoFixAction = 'build';
+
+export interface Check {
   level: 'ok' | 'fail' | 'info';
   label: string;
   detail: string;
   fixes?: string[];
+  /** Set when this check's remedy is safe to run automatically under `--fix`. */
+  autoFix?: AutoFixAction;
+}
+
+/**
+ * The distinct auto-fix actions `--fix` should run for a set of checks. Pure so the policy (what is
+ * and isn't safe to automate) is testable without a daemon. A down daemon or a missing config carry
+ * `fixes` hints but no `autoFix`, so they're reported and never run blindly.
+ */
+export function autoFixActions(checks: Check[]): AutoFixAction[] {
+  const seen = new Set<AutoFixAction>();
+  for (const check of checks) if (check.autoFix) seen.add(check.autoFix);
+  return [...seen];
 }
 
 function print(check: Check): void {
@@ -39,13 +60,15 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
   const checks: Check[] = [];
   let failed = false;
 
+  const configFile = opts.config ?? path.join(cwd, 'sandbox.config.json');
   let config: SandboxConfig | undefined;
   try {
     config = readConfig(cwd, opts.config);
+    const present = existsSync(configFile);
     checks.push({
-      level: 'ok',
+      level: present ? 'ok' : 'info',
       label: 'config',
-      detail: opts.config ?? path.join(cwd, 'sandbox.config.json'),
+      detail: present ? configFile : `no config file — using defaults (create ${configFile} to customise)`,
     });
   } catch (e) {
     failed = true;
@@ -143,12 +166,21 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
 
     if (config) {
       const image = opts.image ?? config.image;
-      const cached = await quiet(opts.backend, ['image', 'inspect', image]);
+      const present = (await quiet(opts.backend, ['image', 'inspect', image])) === 0;
+      // "present" by tag isn't enough: a run rebuilds when the image's spec fingerprint no longer
+      // matches the current config (changed base/extras/Dockerfile). Report that so doctor doesn't
+      // say "present" right before the next run quietly rebuilds it.
+      const upToDate = present && (await sandboxImageUpToDate(opts.backend, resolveBuildSpec(config, image, cwd)));
       checks.push({
-        level: cached === 0 ? 'ok' : 'info',
+        level: present && upToDate ? 'ok' : 'info',
         label: 'image',
-        detail: cached === 0 ? `${image} is present` : `${image} will build on first use`,
-        fixes: cached === 0 ? undefined : ['run `sandbox build` to build it now'],
+        detail: !present
+          ? `${image} will build on first use`
+          : upToDate
+            ? `${image} is present and matches the current config`
+            : `${image} is present but out of date — the next run rebuilds it (config changed since it was built)`,
+        fixes: present && upToDate ? undefined : [`run \`sandbox build\` to ${present ? 'rebuild' : 'build'} it now`],
+        autoFix: present && upToDate ? undefined : 'build',
       });
       checks.push({
         level: 'info',
@@ -159,5 +191,22 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
   }
 
   for (const check of checks) print(check);
+
+  if (opts.fix) {
+    const actions = autoFixActions(checks);
+    if (!actions.length) {
+      console.log('[ok] fix: nothing to auto-fix');
+    } else if (actions.includes('build') && config) {
+      const image = opts.image ?? config.image;
+      console.log(`[..] fix: building ${image} and the egress-proxy image`);
+      const code = await createBackend(opts.backend).buildImages(resolveBuildSpec(config, image, cwd));
+      if (code !== 0) {
+        console.log('[fail] fix: image build failed');
+        return 1;
+      }
+      console.log('[ok] fix: image rebuilt');
+    }
+  }
+
   return failed ? 1 : 0;
 }

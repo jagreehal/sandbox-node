@@ -18,6 +18,8 @@ export * from './presets.js';
 export * from './risk.js';
 export * from './advisory.js';
 export { runPreflight, type PreflightPolicy, type PreflightResult, type PreflightContext } from './preflight.js';
+export { runScan, type ScanResult, type ScanContext } from './scan.js';
+export { runDelta, changedPackages, type DeltaPolicy, type DeltaResult, type DeltaContext } from './delta.js';
 export { runDoctor, type DoctorOptions } from './doctor.js';
 export { runInit, writeSandboxConfig, writeAgentArtifacts, printUnwiredHookWarning, type InitOptions, type AgentArtifacts } from './init.js';
 export { classifyBareCommand, mergePreToolUseHook, mergeAgentSettings, installAgentHook, HOOK_SCRIPT, MANUAL_AGENT_SNIPPET, SECRET_DENY_RULES, type HookDecision, type HookInstall } from './hook.js';

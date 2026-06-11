@@ -1022,7 +1022,15 @@ function yarnSelectorName(selector: string): string {
 export function readAllPackagesFromLockfile(cwd: string, pm: PackageManager): LockfilePackage[] {
   const file = path.join(cwd, lockfileName(pm));
   if (!existsSync(file)) return [];
-  const text = readFileSync(file, 'utf8');
+  return parseLockfilePackages(readFileSync(file, 'utf8'), pm);
+}
+
+/**
+ * Parse a lockfile's full resolved tree from raw text. Split from
+ * {@link readAllPackagesFromLockfile} so callers can diff a *base* lockfile read straight from a git
+ * blob (`git show <ref>:<lockfile>`) without writing it to disk. bun has no parser yet, so it yields [].
+ */
+export function parseLockfilePackages(text: string, pm: PackageManager): LockfilePackage[] {
   switch (pm) {
     case 'npm':
       return allNpmPackages(text);

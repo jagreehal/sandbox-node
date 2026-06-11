@@ -85,6 +85,19 @@ export function specFingerprint(spec: BuildSpec): string {
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
 }
 
+/**
+ * Whether a built image still matches its spec. `absent`: no image for the tag. `stale`: an image
+ * exists but was built from a different spec (its {@link SPEC_LABEL} fingerprint differs) so a run
+ * will rebuild it. `current`: present and up to date. Pure — the docker `image inspect` call lives
+ * in the backend; this just interprets its (exit code, label) result against the expected fingerprint.
+ */
+export type ImageState = 'absent' | 'stale' | 'current';
+
+export function classifyImageState(inspect: { code: number; label: string }, expectedFingerprint: string): ImageState {
+  if (inspect.code !== 0) return 'absent';
+  return inspect.label.trim() === expectedFingerprint ? 'current' : 'stale';
+}
+
 /** True when the spec departs from the bundled default in any way (drives rebuilds + banners). */
 export function isCustomBuild(spec: BuildSpec): boolean {
   return (
