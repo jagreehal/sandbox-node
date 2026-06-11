@@ -27,6 +27,9 @@ Put `sandbox` in front of the npm/pnpm/yarn/bun command you already run. Install
 (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token,
 cloud credentials, or editor/agent state unless you explicitly grant it.
 
+> **First time?** Get the `sandbox` command with `npx @jagreehal/sandbox-node@latest` (no install) or
+> `npm i -D @jagreehal/sandbox-node`, and make sure Docker is running. See [Install](#install) for details.
+
 ```bash
 sandbox setup --vibe         # one-button setup
 sandbox npm install          # install deps — lifecycle scripts are contained
@@ -526,6 +529,24 @@ It's opt-in so the default install stays fast and free of an extra service depen
 **fails open** on a lookup error (warns, proceeds inside containment). Non-malware advisories
 (ordinary CVEs) are reported as warnings, not blocks.
 
+### Retroactive sweep: `sandbox scan`
+
+The malware check above runs *at install* — it only knows what OSV has flagged at that moment. But
+most supply-chain compromises surface **later**: a version is published, looks clean, you install it,
+and *days afterwards* OSV files a `MAL-…` advisory for it. `sandbox scan` closes that time gap — it
+re-queries OSV for the versions in your **committed lockfile** and exits non-zero if any installed
+package is *now* flagged as malware.
+
+```bash
+sandbox scan                  # re-check the whole installed tree against OSV
+sandbox --json scan           # machine-readable (for CI annotations)
+```
+
+It needs no container (a read-only OSV lookup), so it's cheap to run on a schedule. Run it nightly,
+or fold it into the boundary gate with `sandbox verify --scan` so a green check means *boundary
+intact **and** no installed dependency is currently flagged as malware*. Like the install-time check
+it fails open per package on a lookup error, and reports non-malware advisories as warnings.
+
 ## Quick Start
 
 ```bash
@@ -769,6 +790,42 @@ install:
 (a private registry, `nodejs.org` for native modules), add it once with `sandbox allow <host>` so
 it's committed in `sandbox.config.json`. For untrusted pull requests, run the whole job in a
 disposable VM or ephemeral runner (see [Residual Risk](#residual-risk-and---frozen)).
+
+### Gate just what a PR changes — `sandbox delta`
+
+A full `--deep` preflight re-checks the entire resolved tree on every run. In a pull request you
+usually only care about what the PR *introduces*. `sandbox delta` diffs the lockfile against the
+merge target and runs the release-age, malware, and deprecation gates over only the added/bumped
+versions — fast, and low-noise:
+
+```yaml
+# .github/workflows/deps-delta.yml — on: pull_request
+- run: npm i -g @jagreehal/sandbox-node
+- run: git fetch origin ${{ github.base_ref }}
+- run: sandbox --min-release-age 7 --fail-on-advisory delta --base origin/${{ github.base_ref }}
+```
+
+If the base lockfile can't be read it **fails safe** — every resolved package is treated as changed
+and gated. Pass `--base-lockfile <path>` instead of a git ref when you have the base file directly.
+
+### Catch deps that go bad *after* merge — scheduled `sandbox scan`
+
+Install-time gates can't see the future; a nightly sweep can. `sandbox scan` re-checks the committed
+lockfile against OSV and fails if any installed version is now flagged as malware:
+
+```yaml
+# .github/workflows/scan.yml
+on: { schedule: [{ cron: '0 6 * * *' }] }
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm i -g @jagreehal/sandbox-node
+      - run: sandbox scan
+```
 
 ### Limit what the install can reach in CI
 

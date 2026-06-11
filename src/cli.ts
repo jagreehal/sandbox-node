@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { spinner } from '@clack/prompts';
 import { createBackend } from './backend.js';
+import { createBuildReporter, type BuildReporter } from './build-progress.js';
 import type { SandboxConfig } from './config.js';
 import { loadConfig, readConfig } from './config.js';
 import { resolveProjectContext } from './context.js';
 import { renderBadge } from './badge.js';
+import { COMPLETION_SHELLS, completionScript, isCompletionShell } from './completion.js';
 import { resolveBuildSpec } from './image.js';
 import { runVerify } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
@@ -14,14 +19,16 @@ import { runDoctor } from './doctor.js';
 import { execute } from './index.js';
 import { runInit } from './init.js';
 import { log } from './log.js';
-import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv, type PackageManager } from './package-manager.js';
+import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
 import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
 import { probeProject, type ProjectFacts } from './project.js';
 import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
 import { detectShell, installPath, SHELLS, statusPath, uninstallPath, type PathActionResult, type Shell } from './path-setup.js';
 import { type AdvisoryHit } from './advisory.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
-import { execPackageTargets, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
+import { runScan } from './scan.js';
+import { runDelta } from './delta.js';
+import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
 import { runSetup } from './setup.js';
 
@@ -81,16 +88,31 @@ Sandbox commands:
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
   path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
                        npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically —
-                       the human equivalent of the agent hook. Bypass once with 'command npm ...'
-                       or a whole shell with SANDBOX_OFF=1. (shell functions, not a PATH change)
+                       the human equivalent of the agent hook. Also wires tab-completion. Bypass
+                       once with 'command npm ...' or a whole shell with SANDBOX_OFF=1.
+  completion <shell>   print a standalone tab-completion script for zsh|bash|fish (commands,
+                       globals, --preset/--backend/--risk). \`sandbox path install\` already wires
+                       this in; use this to install it on its own, e.g. for zsh:
+                       \`sandbox completion zsh > "\${fpath[1]}/_sandbox"\`.
   preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
                        command would pull, print every finding (+ a pin suggestion per blocked
                        package), and exit non-zero exactly when that install would be blocked.
                        e.g. sandbox --min-release-age 7 --fail-on-advisory preflight npm install
-  doctor               check config, package manager, backend, daemon, and image state
+  scan                 RETROACTIVE malware sweep: re-query OSV for the versions in your committed
+                       lockfile and exit non-zero if any installed package is NOW flagged as
+                       malware. Catches deps that turned malicious AFTER you installed them — the
+                       gap install-time gating can't cover. No container needed. Run in CI/cron.
+  delta [--base <ref>] gate ONLY the dependency changes a PR introduces: diff the lockfile against
+                       <ref> (default origin/main; or --base-lockfile <path>) and run the release-age,
+                       malware, and deprecation gates over just the added/bumped versions. Honors
+                       --min-release-age / --fail-on-advisory. Fast, low-noise PR check.
+  doctor [--fix]       check config, package manager, backend, daemon, and image state.
+                       --fix runs the safe remedies (currently: rebuild an absent/stale image).
   build                build (or rebuild) the sandbox + egress-proxy images
-  verify               exit non-zero unless this repo commits a real sandbox boundary and
-                       no personal layer has loosened it — the CI gate behind the badge
+  verify [--scan]      exit non-zero unless this repo commits a real sandbox boundary and
+                       no personal layer has loosened it — the CI gate behind the badge.
+                       --scan also runs the retroactive malware sweep (so the badge means
+                       "boundary intact AND no installed dep is currently flagged as malware")
   badge [--workflow F] print a markdown "sandboxed" badge. Bare = static provenance badge;
                        --workflow sandbox.yml = the CI-backed verified badge (--repo to override)
   devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
@@ -202,6 +224,22 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
 function fail(msg: string): never {
   console.error(`sandbox: ${msg}`);
   process.exit(1);
+}
+
+/**
+ * The reporter the CLI hands the backend for the one-time image build: a clack spinner on a TTY
+ * (drawn on stderr so stdout — JSON/plan/container output — stays clean), and plain stderr lines in
+ * CI or when piped. Lazy: the spinner only animates if `ensureImage` actually starts a build.
+ */
+function ttyBuildReporter(): BuildReporter {
+  if (!process.stderr.isTTY) return createBuildReporter();
+  const s = spinner({ output: process.stderr });
+  let active = false;
+  return createBuildReporter({
+    start: (m) => { s.start(m); active = true; },
+    succeed: (m) => { if (active) { s.stop(m); active = false; } },
+    fail: (m) => { if (active) { s.error(m); active = false; } },
+  });
 }
 
 function redactPlanEnv(plan: RunPlan): RunPlan {
@@ -575,11 +613,127 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
   return exit;
 }
 
+/**
+ * `sandbox scan` — RETROACTIVE malware sweep over the committed lockfile. Where preflight gates what
+ * an install WOULD pull, scan re-checks what's ALREADY pinned, so a dependency OSV flagged *after*
+ * you installed it is caught on the next run (CI/cron). Malware blocks (exit 1); other advisories are
+ * reported as warnings. Network-only (no container); fails open per package on an OSV error.
+ */
+async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string): Promise<number> {
+  const result = await runScan({ pm, cwd });
+  if (globals.json) {
+    console.log(
+      JSON.stringify(
+        { scanned: result.scanned, lockfileMissing: result.lockfileMissing, blocked: result.malware.length > 0, malware: result.malware, advisories: result.hits.filter((h) => !h.malware) },
+        null,
+        2,
+      ),
+    );
+    return result.malware.length ? 1 : 0;
+  }
+  if (result.lockfileMissing) {
+    log.warn(`scan: no parseable lockfile for ${pm} — nothing to scan (commit a lockfile; bun has no parser yet)`);
+    return 0;
+  }
+  logAdvisoryHits(result.hits);
+  if (result.malware.length) {
+    log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
+    return 1;
+  }
+  log.info(`scan: clean — no installed package is currently flagged as malware (scanned ${result.scanned}${result.hits.length ? `; ${result.hits.length} non-malware advisory hint(s) above` : ''})`);
+  return 0;
+}
+
+/** Read the base (merge-target) lockfile for `delta`: an explicit file, else `git show <ref>:<lockfile>`. */
+function readBaseLockfile(rootDir: string, pm: PackageManager, baseRef: string, baseFile?: string): LockfilePackage[] | undefined {
+  try {
+    const text = baseFile
+      ? readFileSync(baseFile, 'utf8')
+      : execFileSync('git', ['show', `${baseRef}:${lockfileName(pm)}`], { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return parseLockfilePackages(text, pm);
+  } catch {
+    return undefined; // missing ref/file/git → caller treats every head package as changed (gate-all)
+  }
+}
+
+/**
+ * `sandbox delta` — gate only the dependency changes a PR introduces. Diffs the head lockfile against
+ * `--base` (default origin/main) or `--base-lockfile`, then runs the same blocking gates as the
+ * install path over just the added/bumped versions. Low-noise PR check: judges what it introduces.
+ */
+async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: ProjectFacts, rootDir: string, args: string[]): Promise<number> {
+  let baseRef = 'origin/main';
+  let baseFile: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--base') baseRef = args[++i] ?? baseRef;
+    else if (args[i] === '--base-lockfile') baseFile = args[++i];
+  }
+
+  const minReleaseAgeDays = globals.minReleaseAge ?? config.install.minReleaseAgeDays;
+  const advisories = globals.failOnAdvisory ?? config.install.failOnAdvisory;
+  const failOnDeprecated = globals.failOnDeprecated ?? config.install.failOnDeprecated;
+  if (minReleaseAgeDays === 0 && !advisories) {
+    log.info('delta: no blocking gates enabled — pass --min-release-age and/or --fail-on-advisory (or `sandbox init --preset strict`)');
+  }
+
+  const base = readBaseLockfile(rootDir, facts.pm, baseRef, baseFile);
+  const baseMissing = base === undefined;
+  const result = await runDelta(
+    { minReleaseAgeDays, releaseAgeExclude: [...config.install.minReleaseAgeExclude, ...globals.allowRecent], advisories },
+    { pm: facts.pm, cwd: facts.cwd, base: base ?? [], baseMissing },
+  );
+
+  const suggestions = result.ageViolations.length ? await suggestPins(result.ageViolations, minReleaseAgeDays) : [];
+  const blocked = result.ageViolations.length > 0 || result.advisoryHits.some((h) => h.malware) || (failOnDeprecated && result.deprecated.length > 0);
+
+  if (globals.json) {
+    const days = (ms: number): number => Math.floor(ms / (24 * 60 * 60 * 1000));
+    console.log(
+      JSON.stringify(
+        {
+          base: baseFile ?? baseRef,
+          baseMissing,
+          changed: result.changed.length,
+          blocked,
+          ageViolations: result.ageViolations.map((v) => ({ name: v.name, version: v.version, publishedAt: v.publishedAt.toISOString(), ageDays: days(v.ageMs) })),
+          advisoryHits: result.advisoryHits,
+          deprecations: result.deprecated.map((h) => ({ name: h.package, version: h.version, message: h.message })),
+          suggestions: suggestions.map((s) => ({ name: s.name, version: s.version, pin: `sandbox ${facts.pm} add ${s.name}@${s.version}`, ageDays: days(s.ageMs) })),
+        },
+        null,
+        2,
+      ),
+    );
+    return blocked ? 1 : 0;
+  }
+
+  if (baseMissing) log.warn(`delta: couldn't read the base lockfile (${baseFile ?? baseRef}) — gating ALL ${result.changed.length} resolved packages as a precaution`);
+  if (result.changed.length === 0) {
+    log.info(`delta: no dependency changes vs ${baseFile ?? baseRef} — nothing to gate`);
+    return 0;
+  }
+  log.info(`delta: ${result.changed.length} added/changed package(s) vs ${baseFile ?? baseRef}`);
+  if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, minReleaseAgeDays, facts.pm, suggestions);
+  if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
+  logDeprecatedGate(result.deprecated, failOnDeprecated);
+  if (blocked) log.error('delta: would BLOCK this PR — a changed dependency above hit a gate');
+  else log.info('delta: no blocking findings in the changed dependencies');
+  return blocked ? 1 : 0;
+}
+
 async function main(): Promise<number> {
   const { globals, cmd, args } = parse(process.argv.slice(2));
 
   if (cmd === undefined || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(HELP);
+    return 0;
+  }
+
+  if (cmd === 'completion') {
+    const shell = args.find((a) => !a.startsWith('-'));
+    if (!shell) fail(`usage: sandbox completion <${COMPLETION_SHELLS.join('|')}>`);
+    if (!isCompletionShell(shell)) fail(`unknown shell '${shell}' (use: ${COMPLETION_SHELLS.join(' | ')})`);
+    process.stdout.write(completionScript(shell));
     return 0;
   }
 
@@ -616,7 +770,16 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'verify') {
-    return runVerify(context.rootDir, context.configPath);
+    const code = await runVerify(context.rootDir, context.configPath);
+    if (!args.includes('--scan')) return code;
+    // --scan: also run the retroactive malware sweep, so a green verify means
+    // "boundary intact AND no installed dep is currently flagged as malware".
+    const scanCode = await runScanCommand(globals, resolvePackageManager(context.rootDir), context.rootDir);
+    return code || scanCode;
+  }
+
+  if (cmd === 'scan') {
+    return runScanCommand(globals, resolvePackageManager(context.rootDir), context.rootDir);
   }
 
   if (cmd === 'badge') {
@@ -630,7 +793,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const backend = createBackend(globals.backend);
+  const backend = createBackend(globals.backend, { buildReporter: ttyBuildReporter() });
 
   if (cmd === 'build') {
     const loaded = loadConfig(context.rootDir, context.configPath);
@@ -646,6 +809,7 @@ async function main(): Promise<number> {
       backend: globals.backend,
       invocationCwd,
       runWorkdir: context.runWorkdir,
+      fix: args.includes('--fix'),
     });
   }
 
@@ -757,6 +921,10 @@ async function main(): Promise<number> {
       plan = retry;
     }
   };
+
+  if (cmd === 'delta') {
+    return runDeltaCommand(globals, config, facts, context.rootDir, args);
+  }
 
   if (cmd === 'preflight') {
     // `sandbox preflight [pm cmd…]` checks WITHOUT installing. Default to the install surface.

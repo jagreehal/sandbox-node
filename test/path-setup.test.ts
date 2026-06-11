@@ -9,6 +9,7 @@ import {
   detectShell,
   FETCH_RUN_VERBS,
   installPath,
+  PATH_WRAPPER_VERSION,
   rcFileFor,
   removeBlock,
   renderManagedBlock,
@@ -110,7 +111,7 @@ describe('managed block install/update/remove', () => {
   });
 
   it('detects a stale (older-version) block', () => {
-    const stale = renderManagedBlock('zsh').replace('# sandbox-path-version: 1', '# sandbox-path-version: 0');
+    const stale = renderManagedBlock('zsh').replace(`# sandbox-path-version: ${PATH_WRAPPER_VERSION}`, '# sandbox-path-version: 0');
     expect(blockState(stale)).toBe('stale');
   });
 
@@ -121,6 +122,33 @@ describe('managed block install/update/remove', () => {
     const pwsh = installPath({ shell: 'pwsh' });
     expect(pwsh.file).toBeUndefined();
     expect(pwsh.snippet).toContain('__Sandbox-Pm');
+  });
+});
+
+describe('managed block ships shell completion', () => {
+  it('wires tab-completion for each real-shell dialect', () => {
+    // zsh: guarded compdef (inline-safe — no bare #compdef header that only fpath files may carry)
+    const zsh = renderManagedBlock('zsh');
+    expect(zsh).toContain('compdef _sandbox sandbox sandbox-node');
+    expect(zsh).toContain('$+functions[compdef]');
+    expect(zsh).not.toContain('#compdef');
+    // bash + fish: their native completion entry points
+    expect(renderManagedBlock('bash')).toContain('complete -F _sandbox');
+    expect(renderManagedBlock('fish')).toContain('complete -c sandbox');
+  });
+
+  it('omits completion for pwsh (no zsh/bash/fish completer applies)', () => {
+    const pwsh = renderManagedBlock('pwsh');
+    expect(pwsh).not.toContain('compdef');
+    expect(pwsh).not.toContain('complete -c sandbox');
+  });
+
+  it('installs completion alongside the wrappers in one rc edit', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-path-'));
+    const res = installPath({ shell: 'bash', homedir: dir });
+    const text = readFileSync(res.file!, 'utf8');
+    expect(text).toContain('__sandbox_pm');
+    expect(text).toContain('complete -F _sandbox');
   });
 });
 

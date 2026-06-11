@@ -2,9 +2,10 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBuildReporter, type BuildReporter } from './build-progress.js';
 import { withEgress, type EgressHandle } from './egress.js';
 import { capture, quiet, run } from './exec.js';
-import { customDockerfileWarnings, derivedDockerfile, extraStepsNeedRepoContext, hasExtraLayer, isCustomBuild, specFingerprint, SPEC_LABEL, type BuildSpec } from './image.js';
+import { classifyImageState, customDockerfileWarnings, derivedDockerfile, extraStepsNeedRepoContext, hasExtraLayer, isCustomBuild, specFingerprint, SPEC_LABEL, type BuildSpec, type ImageState } from './image.js';
 import { log } from './log.js';
 import type { RunPlan } from './plan.js';
 
@@ -108,16 +109,30 @@ async function buildSandbox(bin: string, spec: BuildSpec): Promise<number> {
 }
 
 /**
+ * Inspect the image for {@link spec.tag} and report whether it's `absent`, `stale` (built from a
+ * different spec), or `current`. Drives both the rebuild decision and the first-run build messaging.
+ */
+export async function imageBuildState(bin: string, spec: BuildSpec): Promise<ImageState> {
+  const { code, stdout } = await capture(bin, ['image', 'inspect', spec.tag, '--format', `{{ index .Config.Labels "${SPEC_LABEL}" }}`]);
+  return classifyImageState({ code, label: stdout }, specFingerprint(spec));
+}
+
+/**
  * True when an image for {@link spec.tag} already exists AND was built from this exact spec
  * (its {@link SPEC_LABEL} matches the current fingerprint). A missing image, or one built from a
  * different base/extras/custom Dockerfile, returns false so callers rebuild instead of running stale.
  */
 export async function sandboxImageUpToDate(bin: string, spec: BuildSpec): Promise<boolean> {
-  const { code, stdout } = await capture(bin, ['image', 'inspect', spec.tag, '--format', `{{ index .Config.Labels "${SPEC_LABEL}" }}`]);
-  return code === 0 && stdout.trim() === specFingerprint(spec);
+  return (await imageBuildState(bin, spec)) === 'current';
 }
 
-export function createBackend(bin: 'docker' | 'podman' = 'docker'): ContainerBackend {
+export interface BackendOptions {
+  /** Surfaces the one-time image build (CLI passes a spinner; library/CI gets plain stderr lines). */
+  buildReporter?: BuildReporter;
+}
+
+export function createBackend(bin: 'docker' | 'podman' = 'docker', backendOpts: BackendOptions = {}): ContainerBackend {
+  const buildReporter = backendOpts.buildReporter ?? createBuildReporter();
   const ensureSimple = async (tag: string, contextDir: string) => {
     if ((await quiet(bin, ['image', 'inspect', tag])) === 0) return;
     log.info('building image', { tag });
@@ -128,10 +143,16 @@ export function createBackend(bin: 'docker' | 'podman' = 'docker'): ContainerBac
   return {
     bin,
     ensureImage: async (spec) => {
-      if (await sandboxImageUpToDate(bin, spec)) return;
-      log.info('building image', { tag: spec.tag, base: spec.baseImage, custom: isCustomBuild(spec) });
+      const state = await imageBuildState(bin, spec);
+      if (state === 'current') return;
+      log.debug('building image', { tag: spec.tag, base: spec.baseImage, custom: isCustomBuild(spec), state });
+      buildReporter.start(state);
       const code = await buildSandbox(bin, spec);
-      if (code !== 0) throw new Error(`sandbox: failed to build ${spec.tag}`);
+      if (code !== 0) {
+        buildReporter.fail();
+        throw new Error(`sandbox: failed to build ${spec.tag}`);
+      }
+      buildReporter.succeed();
     },
     buildImages: async (spec) => {
       const code = await buildSandbox(bin, spec);

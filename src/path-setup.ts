@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { completionScript, isCompletionShell } from './completion.js';
 import type { PackageManager } from './package-manager.js';
 
 /**
@@ -20,8 +21,8 @@ import type { PackageManager } from './package-manager.js';
 export type Shell = 'zsh' | 'bash' | 'fish' | 'pwsh';
 export const SHELLS: readonly Shell[] = ['zsh', 'bash', 'fish', 'pwsh'];
 
-/** Bump when the wrapper body changes, so `sandbox path status` can flag a stale installed block. */
-export const PATH_WRAPPER_VERSION = 1;
+/** Bump when the managed block changes, so `sandbox path status` can flag a stale installed block. */
+export const PATH_WRAPPER_VERSION = 2;
 
 const MARKER_BEGIN = '# >>> sandbox path (managed block — edit via `sandbox path`, not by hand) >>>';
 const MARKER_END = '# <<< sandbox path <<<';
@@ -245,9 +246,23 @@ const HEADER = [
   '# straight through. Bypass once: `command npm …`. Bypass a shell: `export SANDBOX_OFF=1`.',
 ].join('\n');
 
-/** The full managed block (markers + version + header + wrapper) for a shell. */
+/**
+ * The inline (rc-sourced) completion for a shell, or `undefined` when none applies — pwsh uses a
+ * different mechanism and isn't generated. Folded into the managed block so `sandbox path install`
+ * wires both the wrappers AND tab-completion in a single, reversible rc edit.
+ */
+function completionSection(shell: Shell): string | undefined {
+  if (!isCompletionShell(shell)) return undefined;
+  return ['# tab-completion for sandbox commands, globals, and --preset/--backend/--risk', completionScript(shell, { inline: true }).trimEnd()].join('\n');
+}
+
+/** The full managed block (markers + version + header + wrapper + completion) for a shell. */
 export function renderManagedBlock(shell: Shell): string {
-  return [MARKER_BEGIN, VERSION_LINE, HEADER, renderWrapperBody(shell), MARKER_END].join('\n');
+  const parts = [MARKER_BEGIN, VERSION_LINE, HEADER, renderWrapperBody(shell)];
+  const completion = completionSection(shell);
+  if (completion) parts.push(completion);
+  parts.push(MARKER_END);
+  return parts.join('\n');
 }
 
 export type BlockState = 'absent' | 'current' | 'stale';
@@ -310,8 +325,9 @@ export function installPath(opts: { shell: Shell; homedir?: string; print?: bool
     shell,
     file,
     messages: [
-      `sandbox: ${verb} the shell wrappers in ${file}`,
+      `sandbox: ${verb} the shell wrappers + tab-completion in ${file}`,
       `sandbox: npm/pnpm/yarn/bun install + npx/bunx now route through sandbox in new ${shell} shells`,
+      `sandbox: \`sandbox <tab>\` now completes commands, globals, and --preset/--backend/--risk`,
       `sandbox: reload now with: ${reloadHint(shell, file)}`,
       'sandbox: bypass once with `command npm …`, or a whole shell with `export SANDBOX_OFF=1`',
     ],
