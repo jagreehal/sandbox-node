@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { spinner } from '@clack/prompts';
+import { confirm, isCancel, spinner } from '@clack/prompts';
 import { createBackend } from './backend.js';
 import { createBuildReporter, type BuildReporter } from './build-progress.js';
 import type { SandboxConfig } from './config.js';
@@ -28,6 +28,7 @@ import { type AdvisoryHit } from './advisory.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
 import { runScan } from './scan.js';
 import { runDelta } from './delta.js';
+import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
 import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
 import { runSetup } from './setup.js';
@@ -106,6 +107,11 @@ Sandbox commands:
                        <ref> (default origin/main; or --base-lockfile <path>) and run the release-age,
                        malware, and deprecation gates over just the added/bumped versions. Honors
                        --min-release-age / --fail-on-advisory. Fast, low-noise PR check.
+  upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates) —
+                       NOT just within the range (that's \`sandbox npm update\`). Your release-age
+                       gate drives ncu's --cooldown automatically, the proposed versions go through
+                       the SAME gates as install, and --write rewrites package.json then installs in
+                       the sandbox. --minor/--patch/--target to cap the jump; --reject <pat> to skip.
   doctor [--fix]       check config, package manager, backend, daemon, and image state.
                        --fix runs the safe remedies (currently: rebuild an absent/stale image).
   build                build (or rebuild) the sandbox + egress-proxy images
@@ -721,6 +727,145 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
   return blocked ? 1 : 0;
 }
 
+const UPGRADE_TARGETS = ['latest', 'minor', 'patch', 'newest', 'greatest', 'semver'] as const;
+
+interface UpgradeArgs {
+  write: boolean;
+  yes: boolean;
+  target: UpgradeTarget;
+  reject: string[];
+}
+
+function parseUpgradeArgs(args: string[]): UpgradeArgs {
+  const out: UpgradeArgs = { write: false, yes: false, target: 'latest', reject: [] };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--write' || a === '-w') out.write = true;
+    else if (a === '--yes' || a === '-y') out.yes = true;
+    else if (a === '--minor') out.target = 'minor';
+    else if (a === '--patch') out.target = 'patch';
+    else if (a === '--target') {
+      const t = args[++i];
+      if (!t || !(UPGRADE_TARGETS as readonly string[]).includes(t)) fail(`--target needs one of: ${UPGRADE_TARGETS.join('|')} (got '${t ?? ''}')`);
+      out.target = t as UpgradeTarget;
+    } else if (a === '--reject') out.reject.push(args[++i] ?? '');
+    else fail(`unknown upgrade flag '${a}' — try: --write · --minor · --patch · --target <${UPGRADE_TARGETS.join('|')}> · --reject <pat> · --yes`);
+  }
+  out.reject = out.reject.filter(Boolean);
+  return out;
+}
+
+/**
+ * `sandbox upgrade` — move declared dependency RANGES to newer versions (what npm-check-updates does),
+ * which `sandbox npm update` won't: update stays within the existing range. The release-age threshold
+ * from sandbox.config.json drives ncu's `--cooldown`, so the user never re-types it and the two can't
+ * drift. ncu (host-only: it just reads/writes package.json + queries the registry) proposes; the SAME
+ * gate engine the install path uses vets the proposed versions; only on `--write` does it rewrite
+ * package.json and then materialise the change through the JAILED install. Blocked upgrades never write.
+ */
+async function runUpgradeCommand(
+  globals: Globals,
+  config: SandboxConfig,
+  facts: ProjectFacts,
+  args: string[],
+  materialize: () => Promise<number>,
+  ncu: NcuRunner = defaultNcuRunner(),
+): Promise<number> {
+  const ua = parseUpgradeArgs(args);
+  // One source of truth: the install gate's resolved policy. cooldown == the release-age threshold;
+  // the cooldown-exempt set == the same packages the age gate exempts (config + --allow-recent).
+  const ap = resolvePolicy(globals, config, { model: 'install', pm: facts.pm, frozen: false, args: [] });
+  const cooldownDays = ap.minReleaseAgeDays;
+  const exempt = ap.policy.releaseAgeExclude;
+  const policy: UpgradePolicy = { cooldownDays, target: ua.target, reject: ua.reject, filter: [] };
+
+  if (!globals.json) {
+    const src = globals.minReleaseAge !== undefined ? '--min-release-age' : 'sandbox.config.json';
+    const ex = exempt.length ? `, ${exempt.length} exempt` : '';
+    const cd = cooldownDays > 0 ? ` · cooldown ${cooldownDays}d (from ${src}${ex})` : ' · no cooldown (release-age gate off)';
+    log.info(`upgrade: checking ${facts.pm} for newer ${ua.target} versions${cd} …`);
+  }
+
+  // Discovery: one pass normally, two when a cooldown exemption must be honored (ncu's cooldown is
+  // global). Proceed if ANY pass produced output; only error when every pass failed to run.
+  const current = readDeclaredRanges(facts.cwd);
+  const passes = ncuPasses(policy, exempt, facts.pm);
+  const lists: ProposedUpgrade[][] = [];
+  let ran = false;
+  for (const argv of passes) {
+    const r = ncu(argv, facts.cwd);
+    if (r.code === 0 || r.stdout.trim()) {
+      ran = true;
+      lists.push(parseUpgrades(r.stdout, current));
+    }
+  }
+  if (!ran) {
+    log.error(`upgrade: ${NCU_SPEC} couldn't run — check the network and the npm-check-updates output above`);
+    return 1;
+  }
+  const upgrades = mergeProposals(lists);
+
+  if (upgrades.length === 0) {
+    if (globals.json) console.log(JSON.stringify({ cooldownDays, target: ua.target, blocked: false, upgrades: [] }, null, 2));
+    else log.info(`upgrade: every dependency is already at its newest eligible ${ua.target} version${cooldownDays ? ` within the ${cooldownDays}-day cooldown` : ''} — nothing to do`);
+    return 0;
+  }
+
+  // Vet the proposed target versions through the install-path gates so `upgrade` carries identical
+  // guarantees. Cooldown already filtered fresh publishes inside ncu; re-running the age gate here is
+  // belt-and-suspenders and catches any reject/exclude drift. Direct targets only (no --deep tree).
+  const gatePolicy: PreflightPolicy = { ...ap.policy, deep: false };
+  const result = await runPreflight(upgradeTargets(upgrades), gatePolicy, { pm: facts.pm, cwd: facts.cwd });
+  const deps = deprecatedHints(result);
+  const rows = classifyUpgrades(upgrades, {
+    ageNames: new Set(result.ageViolations.map((v) => v.name)),
+    malwareNames: new Set(result.advisoryHits.filter((h) => h.malware).map((h) => h.name)),
+    deprecatedNames: new Set(deps.map((h) => h.package)),
+  });
+  const blocked = blockExit(result, ap) !== undefined;
+  const suggestions = result.ageViolations.length ? await suggestPins(result.ageViolations, cooldownDays) : [];
+
+  if (globals.json) {
+    console.log(JSON.stringify({ cooldownDays, target: ua.target, blocked, upgrades: rows.map((r) => ({ name: r.name, from: r.from, to: r.to, gate: r.gate })) }, null, 2));
+    return blocked ? 1 : 0;
+  }
+
+  log.info(`upgrade: ${rows.length} package(s) can move:\n${renderUpgradeTable(rows)}`);
+
+  if (blocked) {
+    if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, cooldownDays, facts.pm, suggestions);
+    if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
+    logDeprecatedGate(deps, ap.failOnDeprecated);
+    log.error('upgrade: BLOCKED — a proposed upgrade hit a gate. package.json is untouched. Skip it with --reject <pkg>, or pin a known-good version.');
+    return 1;
+  }
+
+  if (!ua.write) {
+    log.info('upgrade: all proposed upgrades pass the gates. Apply them with:  sandbox upgrade --write');
+    return 0;
+  }
+
+  if (!ua.yes && process.stdout.isTTY) {
+    const ok = await confirm({ message: `Write these ${rows.length} upgrade(s) to package.json and install in the sandbox?` });
+    if (isCancel(ok) || !ok) {
+      log.info('upgrade: cancelled — package.json untouched');
+      return 0;
+    }
+  }
+
+  // Write exactly what was gated — apply the previewed `to` ranges directly, so no version published
+  // between preview and write can slip in. (ncu is discovery-only; it never writes.)
+  const pkgPath = path.join(facts.cwd, 'package.json');
+  try {
+    writeFileSync(pkgPath, applyUpgrades(readFileSync(pkgPath, 'utf8'), rows));
+  } catch (e) {
+    log.error(`upgrade: couldn't write package.json (${e instanceof Error ? e.message : String(e)}) — nothing changed`);
+    return 1;
+  }
+  log.info(`upgrade: package.json updated (${rows.length} dep(s)) — installing in the sandbox to refresh the lockfile …`);
+  return materialize();
+}
+
 async function main(): Promise<number> {
   const { globals, cmd, args } = parse(process.argv.slice(2));
 
@@ -924,6 +1069,12 @@ async function main(): Promise<number> {
 
   if (cmd === 'delta') {
     return runDeltaCommand(globals, config, facts, context.rootDir, args);
+  }
+
+  if (cmd === 'upgrade') {
+    // On --write, materialise the rewritten package.json through the jailed install path.
+    const materialize = () => emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
+    return runUpgradeCommand(globals, config, facts, args, materialize);
   }
 
   if (cmd === 'preflight') {

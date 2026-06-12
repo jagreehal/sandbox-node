@@ -17,7 +17,10 @@ review-before-install — and you only run the real install once the user has cl
 ## Workflow
 
 1. **Confirm the tool is present.** `sandbox doctor` (or `npx @jagreehal/sandbox-node doctor`).
-   If there's no `sandbox.config.json`, run `sandbox init --preset balanced` first.
+   If there's no `sandbox.config.json`, run `sandbox init --preset balanced` first. For a human who
+   keeps installing in their own shell, suggest `sandbox path install` once: it routes bare
+   `npm/pnpm/yarn/bun install` (+ `npx`/`bunx`) through sandbox automatically, so neither of you has
+   to remember the prefix. `sandbox setup` also offers to wire this. See [REFERENCE.md](REFERENCE.md).
 
 2. **Review pass — check WITHOUT installing.** Use the `preflight` command: it runs the
    gates over what the command would pull and **never installs**, so this is always safe to

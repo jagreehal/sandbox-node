@@ -38,6 +38,52 @@ Exit codes: **0** = no blocking findings (safe to install); **1** = would block.
 newest **stable, non-deprecated, already-aged-in** version and gives a ready-to-run `pin`
 command. Empty when no older version qualifies (then recommend waiting or `--allow-recent`).
 
+### Annotated `--json` example
+
+Real preflight from `sandbox --json --fail-on-risk --fail-on-advisory --min-release-age 7 preflight npm install left-pad` where `left-pad@1.3.0` was published 2 hours ago:
+
+```json
+{
+  "blocked": true,
+  "checked": 1,
+  "deepChecked": 0,
+  "hints": [
+    {
+      "code": "recent_version",
+      "package": "left-pad",
+      "version": "1.3.0",
+      "severity": "warn",
+      "message": "published 2 hours ago — install still contained"
+    }
+  ],
+  "ageViolations": [
+    {
+      "name": "left-pad",
+      "version": "1.3.0",
+      "publishedAt": "2026-06-12T08:30:00.000Z",
+      "ageDays": 0
+    }
+  ],
+  "advisoryHits": [],
+  "deprecations": [],
+  "suggestions": [
+    {
+      "name": "left-pad",
+      "version": "1.2.0",
+      "pin": "sandbox npm add left-pad@1.2.0",
+      "ageDays": 159
+    }
+  ]
+}
+```
+
+**How agents read this:**
+- `blocked: true` → the install would have been refused; do NOT proceed without user approval
+- `ageViolations[]` → each is a version blocked by the release-age gate; use `suggestions[]` for a safe pin
+- `advisoryHits[]` → if `malware: true`, **abort** immediately (do not offer to proceed); otherwise surface advisory IDs as info
+- `suggestions[]` → ready-to-run `pin` commands; prefer the narrowest override (`--allow-recent <pkg>`) over blanket (`--min-release-age 0`)
+- `deprecations[]` → maintainer-deprecated; blocks by default, re-run with `--allow-deprecated` only if the user insists
+
 ## The gates (preflight)
 
 The preflight resolves the registry once and runs every active gate over that result. It
@@ -68,6 +114,41 @@ malware. Risk *hints* (bin/script/recent) stay direct-only — they're advisory,
 
 Everything **fails open**: a registry/OSV lookup error proceeds inside containment rather
 than wedging the install.
+
+## `upgrade` command (move ranges to newer versions)
+
+`sandbox npm update` only moves deps *within* their declared range. To bump the ranges themselves
+(including majors) use `sandbox upgrade`, which wraps `npm-check-updates`. Key points for an agent:
+
+- The config's `minReleaseAgeDays` becomes ncu's `--cooldown`, so proposals already exclude
+  fresh publishes. The proposed versions then run through the **same gates as install**
+  (release-age, malware, deprecation, risk), so `upgrade` carries identical guarantees.
+- **No write without passing the gates.** Default is a preview table, with `package.json` untouched.
+  A blocked proposal aborts the write and prints the same pin suggestions as a blocked install.
+- `--write` applies the previewed, gated versions to `package.json` (sandbox writes them, not ncu,
+  so you get exactly what you reviewed), then runs the install **in the jail** to refresh the
+  lockfile. ncu reads `package.json` and queries the registry but never runs package code, so
+  discovery stays on the host.
+- Scope the jump: `--minor` / `--patch` / `--target <latest|minor|patch|newest|greatest|semver>`.
+  Skip a package: `--reject <pattern>`. Skip the TTY confirm: `--yes`. Machine-readable: `--json`.
+- Exit code: `0` (applied, nothing to do, or clean preview), `1` (a proposal hit a gate, nothing
+  written). On `--json`, `blocked: true` means do not proceed without user approval.
+
+## `path` command (route bare installs automatically)
+
+So a human doesn't have to remember the `sandbox` prefix, `sandbox path install` writes shell
+functions into their rc file (zsh/bash/fish; pwsh is print-and-paste). After that, bare
+`npm/pnpm/yarn/bun install`, `add`, `ci`, `update`, `upgrade`, `audit fix`, and the fetch-and-run
+runners (`npx`/`bunx`/`pnpx`, `<pm> dlx`/`exec`) route through sandbox; read-only/build/run/publish
+commands hit the real tool untouched.
+
+- `sandbox path install` — wire it (edits the rc, idempotent). `status` / `uninstall` / `print`
+  manage it; `--shell zsh|bash|fish|pwsh` targets a specific shell.
+- `sandbox setup` offers to wire it interactively (one keypress).
+- Escape hatches: `command npm …` (one call) or `SANDBOX_OFF=1` (whole shell).
+- This is a **convenience guardrail, not a containment boundary** — it depends on the interactive
+  shell. The real protection is still `sandbox` running the install in a container; for CI use
+  `sandbox verify` + `--frozen --fail-on-egress`, for agents the `--agent` hook.
 
 ## Flags this skill uses
 

@@ -47,6 +47,8 @@ malware check, and risk hints resolve against the versions the command would pul
 freshly-published malicious bump is caught before it's fetched:
 
 - `sandbox npm update` (and `pnpm up`, `yarn upgrade`, `bun update`) — update existing deps within range.
+- `sandbox upgrade` — move the declared ranges *past* their current bounds (including majors), the
+  one thing `npm update` won't do. See [Upgrade ranges safely](#upgrade-ranges-safely--sandbox-upgrade).
 - `sandbox npm audit fix` (and `pnpm audit --fix`) — remediate vulnerabilities by pulling fixed
   versions. (Yarn and bun have no in-place audit-fix command.)
 
@@ -329,6 +331,26 @@ Sandbox commands:
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
   doctor               check config, package manager, backend, daemon, and image state
   build                build or rebuild the sandbox and egress-proxy images
+  preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
+                       command would pull, print findings (+ a pin suggestion per blocked
+                       package), and exit non-zero exactly when that install would be blocked
+                       — e.g. sandbox --min-release-age 7 --fail-on-advisory preflight npm install
+  scan                 retroactive malware sweep: re-query OSV for every version in your
+                       committed lockfile and exit non-zero if any is NOW flagged as malware.
+                       Catches deps that turned malicious AFTER install. No container needed.
+  delta [--base <ref>] gate ONLY the dependency changes a PR introduces: diff the lockfile
+                       against <ref> (default origin/main) and run the release-age, malware,
+                       and deprecation gates on added/bumped versions. Fast, low-noise PR check.
+  upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates),
+                       not just within the range. Your release-age gate drives ncu's --cooldown,
+                       proposals go through the same gates as install, and --write rewrites
+                       package.json then installs in the sandbox (--minor/--patch/--reject to scope)
+  verify [--scan]      exit non-zero unless the repo commits a real sandbox boundary and
+                       no personal layer has loosened it — the CI gate behind the badge
+  badge [--workflow F] print a "sandboxed" markdown badge. Bare = static provenance badge;
+                       --workflow sandbox.yml = CI-backed verified badge
+  devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
+                       (per-session) form of the same policy: agent + editor inside the jail
 
 Expert commands (the models the pass-through maps onto):
   install [pm-args]    install deps; persistence paths and package.json stay read-only,
@@ -384,6 +406,13 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox add <pkg...>` | Expert form of the add model. Most users should use `sandbox npm install <pkg>` or `sandbox pnpm add <pkg>`. This model keeps the same isolation as `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. |
 | `sandbox run -- <cmd>` | Expert form of the run model. Most users should use `sandbox npm test`, `sandbox npm run dev`, `sandbox npx <tool>`, or similar. `run.network` defaults to `none`. |
 | `sandbox shell` | Run `bash -l` in the container. |
+| `sandbox preflight [pm cmd]` | Supply-chain review WITHOUT installing. Runs the same gates as a real install (release-age, malware, deprecation, risk hints), prints every finding + a pin suggestion per blocked package, and exits non-zero exactly when that install would be blocked. Use `--json` for a structured report. |
+| `sandbox scan` | Retroactive malware sweep over the committed lockfile. Re-queries OSV for every resolved version and exits non-zero if any installed dep is NOW flagged as malware — catches deps that turned malicious after you installed them. No container needed; cheap enough for cron. |
+| `sandbox delta [--base <ref>]` | Gate only the dependency changes a PR introduces. Diffs the lockfile against `<ref>` (default `origin/main`) and runs the release-age, malware, and deprecation gates over just the added/bumped versions. Fails safe when the base lockfile is unreadable. Fast, low-noise PR preflight. |
+| `sandbox upgrade [--write]` | Move declared dependency **ranges** to newer versions (wraps `npm-check-updates`) — what `sandbox npm update` won't do (it stays within the range). Your `minReleaseAgeDays` drives ncu's `--cooldown` automatically, so you only see versions that have aged in; the proposed versions then pass through the **same** malware/deprecation/age gates as install. Without `--write` it previews a gated table; with `--write` it rewrites `package.json` and installs in the sandbox. Scope the jump with `--minor`/`--patch`/`--target`, skip packages with `--reject <pat>`. |
+| `sandbox verify [--scan]` | Exit non-zero unless this repo commits a real sandbox boundary and no personal layer has loosened it. With `--scan`, also runs the retroactive malware sweep. The CI gate behind the verified badge. |
+| `sandbox badge [--workflow F]` | Print a markdown badge for the README. Bare = static provenance badge; `--workflow sandbox.yml` = CI-backed verified badge that links to real evidence. |
+| `sandbox devcontainer init` | Generate a `.devcontainer/` from the same `sandbox.config.json` so the persistent form inherits the same hardening. Add `--force` to overwrite. |
 
 The tool picks a package manager from the lockfile: `pnpm-lock.yaml` first, then `yarn.lock`, then `bun.lock`/`bun.lockb`, then npm.
 
@@ -605,6 +634,9 @@ solves for AI agents — a boundary set once beats a rule you have to remember. 
 the human-shell equivalent: it installs **shell functions** so a bare `npm install` can't run
 un-sandboxed out of habit.
 
+`sandbox setup` offers to wire this for you on the spot: answer yes to its prompt and it edits your
+shell rc, so you never type the `sandbox` prefix again. To do it directly, or to manage it later:
+
 ```bash
 sandbox path install      # write the wrappers into your shell rc (auto-detects zsh/bash/fish)
 sandbox path status       # installed / current / stale / absent
@@ -808,6 +840,38 @@ versions — fast, and low-noise:
 If the base lockfile can't be read it **fails safe** — every resolved package is treated as changed
 and gated. Pass `--base-lockfile <path>` instead of a git ref when you have the base file directly.
 
+### Upgrade ranges safely — `sandbox upgrade`
+
+`sandbox npm update` only moves deps *within* their declared range; it never bumps `^4` to `^5`. To
+move the ranges themselves you reach for [`npm-check-updates`](https://github.com/raineorshine/npm-check-updates) (`ncu`). But ncu defaults to
+the absolute latest version of every dep, including ones published minutes ago. Your release-age gate
+exists to close exactly that window.
+
+`sandbox upgrade` wraps ncu and drives it from your config. The `minReleaseAgeDays` you already set
+becomes ncu's `--cooldown`, so you only move to versions that have aged in. The proposed versions then
+pass the same malware, deprecation, and age gates as a normal install, and nothing is written until
+they clear:
+
+```bash
+sandbox upgrade                 # preview: a gated table of what could move, package.json untouched
+sandbox upgrade --minor         # cap the jump at minor (no major bumps)
+sandbox upgrade --reject react  # skip a package entirely
+sandbox upgrade --write         # rewrite package.json, then install in the sandbox to refresh the lockfile
+```
+
+A blocked upgrade never touches `package.json`, and you get the same pin suggestions as a blocked
+install. `sandbox upgrade` uses ncu to discover upgrades, never to write them: it writes the exact
+versions you saw gated, so nothing published between preview and write can slip in. ncu reads
+`package.json` and queries registry metadata but never runs package code, so discovery runs on the
+host while the install that applies the change stays in the jail. ncu is pinned; override it with
+`SANDBOX_NCU_SPEC`.
+
+`sandbox upgrade` honors your `minReleaseAgeExclude` entries (and `--allow-recent`) per-package: those
+packages may move to a recent version while the rest stay held to the cooldown. ncu's `--cooldown` is
+global, so `sandbox upgrade` runs a second cooldown-free pass over just the exempt packages and merges
+the results. The age gate still runs over the whole set, so an exemption can't admit anything the gate
+would otherwise block.
+
 ### Catch deps that go bad *after* merge — scheduled `sandbox scan`
 
 Install-time gates can't see the future; a nightly sweep can. `sandbox scan` re-checks the committed
@@ -911,6 +975,34 @@ Astro `4321`, Angular `4200`, webpack `8080`):
 sandbox setup --vibe
 sandbox npm run dev             # open http://localhost:5173 — whichever port your app picks is mapped
 ```
+
+Works the same for `pnpm`, `yarn`, and `bun`:
+
+```bash
+sandbox pnpm run dev
+sandbox yarn run dev
+sandbox bun run dev
+```
+
+### Hot-reload and file watching
+
+The sandbox bind-mounts your project directory, so edits on the host reach the container with no
+copy step. Dev servers with hot module replacement run inside the sandbox: Vite, webpack HMR,
+Next.js Fast Refresh, and Bun's `--hot`.
+
+- **HMR (Vite / webpack / Rspack / Turbopack)** — edit `src/App.tsx` and the browser updates.
+- **File watchers (`--watch`, `nodemon`, `tsx watch`)** — edit a source file and the process restarts.
+- **Bun `--hot`** — works the same as npm/pnpm/yarn inside the container.
+
+On **Linux**, inotify events cross the bind mount, so watchers fire with no extra config.
+`chokidar`, Vite, webpack, and Bun all watch via inotify by default.
+
+On **macOS and Windows**, Docker runs the container inside a Linux VM, and host filesystem events
+don't always cross that boundary. If a watcher misses changes, turn on polling and hot-reload works
+again:
+
+- Vite: set `server.watch.usePolling` to `true` in `vite.config.ts`
+- chokidar-based tools (`nodemon`, `tsx watch`): set `CHOKIDAR_USEPOLLING=1`
 
 For a one-off without changing your config, use the escape hatch:
 
@@ -1293,10 +1385,13 @@ runtime escape lands in a throwaway guest rather than on a host with standing cr
 ## Development
 
 ```bash
-npm test
-npm run typecheck
-npm run build
+npm run dev            # run the CLI from source (tsx src/cli.ts) — no build needed
+npm test               # run the unit tests
+npm run typecheck      # type-check the project
+npm run build          # build the dist for npm packaging
 ```
+
+For testing the CLI against your own repos during development, `npm run dev -- --dry-run npm install` is the fast iteration loop — it previews the plan without touching a container.
 
 ## How This Differs From Other Tools
 
