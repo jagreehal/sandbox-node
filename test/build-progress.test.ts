@@ -17,14 +17,18 @@ describe('classifyImageState', () => {
 });
 
 describe('buildNotice', () => {
-  it('frames an absent image as a one-time setup', () => {
-    expect(buildNotice('absent').toLowerCase()).toContain('one-time');
+  it('frames an absent image as a one-time setup with context about what the image is', () => {
+    const notice = buildNotice('absent');
+    expect(notice.toLowerCase()).toContain('one-time');
+    expect(notice).toContain('Node.js container');
+    expect(notice).toContain('cached after');
   });
 
-  it('frames a stale image as a rebuild because config changed', () => {
+  it('frames a stale image as a rebuild because config changed, with context about reproducibility', () => {
     const notice = buildNotice('stale').toLowerCase();
     expect(notice).toContain('rebuild');
     expect(notice).toContain('config');
+    expect(notice).toContain('reproducible');
   });
 });
 

@@ -82,6 +82,16 @@ export function initNextCommands(preset: PresetName): string[] {
   return preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox npm run dev'] : ['sandbox npm install', 'sandbox npm test'];
 }
 
+/** Post-init tips, one string per tip. Preflight + path apply to every preset; agent adds one. */
+export function initTips(preset: PresetName): string[] {
+  const tips = [
+    'review before installing — sandbox preflight npm install runs the gates without installing',
+    'stop typing the prefix — sandbox path install routes bare npm/pnpm/yarn/bun install through sandbox in your shell',
+  ];
+  if (preset === 'agent') tips.push('full agent isolation (editor + agent in the jail) — sandbox devcontainer init');
+  return tips;
+}
+
 /** Loud, non-destructive notice: settings.json couldn't be parsed, so we left it alone. */
 export function printUnwiredHookWarning(settingsRelPath: string): void {
   console.log(`sandbox: ⚠ ${settingsRelPath} isn't valid JSON, so it was left untouched (nothing lost).`);
@@ -107,10 +117,9 @@ export function printInitSummary(preset: PresetName, configFile: string, agent?:
   console.log('');
   console.log('Next:');
   for (const command of initNextCommands(preset)) console.log(`  ${command}`);
-  if (preset === 'agent') {
+  for (const tip of initTips(preset)) {
     console.log('');
-    console.log('Tip:');
-    console.log('  Full agent isolation (editor + agent in the jail):  sandbox devcontainer init');
+    console.log(`Tip: ${tip}`);
   }
 }
 
