@@ -24,7 +24,7 @@ export interface ContainerBackend {
   ensureImage(spec: BuildSpec): Promise<void>;
   buildImages(spec: BuildSpec): Promise<number>;
   runPlan(plan: RunPlan, override?: RunOverride): Promise<number>;
-  withEgress<T>(allow: string[], fn: (handle: EgressHandle) => Promise<T>, onDenials?: (hosts: string[]) => void): Promise<T>;
+  withEgress<T>(allow: string[], fn: (handle: EgressHandle) => Promise<T>, onDenials?: (hosts: string[]) => void, onLog?: (logText: string) => void): Promise<T>;
 }
 
 /** Locate the package root (holds Dockerfile + proxy/) from this module. */
@@ -160,9 +160,9 @@ export function createBackend(bin: 'docker' | 'podman' = 'docker', backendOpts: 
       return run(bin, ['build', '-t', PROXY_IMAGE, join(assetsRoot(), 'proxy')]);
     },
     runPlan: (plan, override) => run(bin, renderRunArgs(plan, override)),
-    withEgress: async (allow, fn, onDenials) => {
+    withEgress: async (allow, fn, onDenials, onLog) => {
       await ensureSimple(PROXY_IMAGE, join(assetsRoot(), 'proxy'));
-      return withEgress(bin, PROXY_IMAGE, allow, fn, onDenials);
+      return withEgress(bin, PROXY_IMAGE, allow, fn, onDenials, onLog);
     },
   };
 }

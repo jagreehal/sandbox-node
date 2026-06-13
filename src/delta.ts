@@ -1,4 +1,5 @@
 import { advisoriesForPackages, createAdvisoryClient, type AdvisoryClient, type AdvisoryHit } from './advisory.js';
+import { matchKnownBad, type KnownBadEntry, type KnownBadHit } from './known-bad.js';
 import {
   createRegistryClient,
   readAllPackagesFromLockfile,
@@ -49,6 +50,8 @@ export interface DeltaResult {
   ageViolations: ReleaseAgeViolation[];
   advisoryHits: AdvisoryHit[];
   deprecated: RiskHint[];
+  /** Changed packages matched by the local blocklist / malware feeds — always block. */
+  knownBadHits: KnownBadHit[];
   /** Base lockfile couldn't be read — every head package is treated as changed (fail safe, gate all). */
   baseMissing: boolean;
 }
@@ -61,6 +64,8 @@ export interface DeltaContext {
   baseMissing?: boolean;
   registryClient?: RegistryClient;
   advisoryClient?: AdvisoryClient;
+  /** Local blocklist + cached malware-feed entries to match the changed set against. */
+  knownBad?: KnownBadEntry[];
   now?: Date;
   /** Override head lockfile reading (tests); defaults to reading `cwd`'s lockfile. */
   readLockfile?: (cwd: string, pm: PackageManager) => LockfilePackage[];
@@ -79,6 +84,7 @@ export async function runDelta(policy: DeltaPolicy, ctx: DeltaContext): Promise<
     ageViolations: [],
     advisoryHits: [],
     deprecated: [],
+    knownBadHits: matchKnownBad(changed, ctx.knownBad ?? []),
     baseMissing: ctx.baseMissing ?? false,
   };
   if (changed.length === 0) return result;

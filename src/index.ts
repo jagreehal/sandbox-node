@@ -6,6 +6,8 @@ import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
 import { missingAllowHosts, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { classifyCommand, snapshotTree, summarizeUnexpectedChanges } from './tamper.js';
+import { appendAudit } from './receipt.js';
+import { scanCanaryLog, type Canary } from './canary.js';
 
 export * from './config.js';
 export * from './dispatch.js';
@@ -64,7 +66,47 @@ export {
   type DescribeHostsOptions,
 } from './hosts.js';
 export { classifyCommand, snapshotTree, summarizeUnexpectedChanges, type CommandKind, type TreeSnapshot } from './tamper.js';
-export { parseVersion, runtimeVulnerabilities, type RuntimeVuln } from './runtime-cve.js';
+export { parseVersion, runtimeVulnerabilities, nodeEolStatus, type RuntimeVuln, type NodeEolStatus } from './runtime-cve.js';
+export {
+  loadKnownBad,
+  matchKnownBad,
+  parseAdvisoryFile,
+  loadAdvisoryFile,
+  loadFeedCache,
+  parseFeed,
+  updateFeeds,
+  projectAdvisoryPath,
+  userAdvisoryPath,
+  feedCacheDir,
+  PROJECT_ADVISORY_NAME,
+  type KnownBadEntry,
+  type KnownBadHit,
+  type Severity,
+  type FeedUpdate,
+  type FeedPackage,
+} from './known-bad.js';
+export { scanSecrets, scanText, listScannableFiles, redact, shannonEntropy, highEntropyToken, luhnValid, jwtValid, SECRET_RULES, SKIP_DIRS, type SecretRule, type SecretFinding, type ScanSecretsOptions } from './secrets.js';
+export {
+  canonicalize,
+  sha256Hex,
+  chainEntry,
+  appendAudit,
+  readAuditLog,
+  verifyChain,
+  generateSigningKey,
+  signPayload,
+  verifyReceipt,
+  keyFingerprint,
+  GENESIS,
+  type AuditEntry,
+  type ChainVerdict,
+  type SigningKeyPair,
+  type SignedReceipt,
+  type ReceiptVerdict,
+} from './receipt.js';
+export { signVerifyReceipt, runVerifyReceipt, runKeygen, runAuditVerify, readSigningKey, verifyConfig, runVerify, type VerifyResult, type VerifyReceiptPayload } from './verify.js';
+export { makeCanary, scanCanaryLog, canaryMarkers, type Canary, type CanaryHit } from './canary.js';
+export { runDemo, demoPlan, DEMO_SCENARIOS, IMDS_BLOCKED_CODE, type DemoScenario, type DemoOutcome, type DemoRunner } from './demo.js';
 
 /**
  * A read-only volume mounted at a missing persistence path blocks its creation,
@@ -93,11 +135,44 @@ function cleanupBlockerMountpoints(plan: RunPlan): void {
 export interface ExecuteOptions {
   /** Exit non-zero if the proxy refused any egress (a CI tripwire for exfil attempts). */
   failOnEgress?: boolean;
+  /** Plant canary honeytokens in the container env and watch the proxy log for them (allowlist mode only). */
+  canary?: Canary;
 }
 
 export interface ExecuteResult {
   code: number;
   deniedHosts: string[];
+  /** Canary nonces caught in the egress log — a planted credential left the box. Empty unless canaries ran. */
+  canaryHits: string[];
+}
+
+/**
+ * Append this run to the hash-chained audit log when `SANDBOX_AUDIT_LOG` points at one — opt-in,
+ * tamper-evident evidence of what the sandbox did (run, or blocked egress). Best-effort by contract:
+ * audit bookkeeping must NEVER break an install, so any failure here is swallowed. Verify the chain
+ * later with `sandbox audit verify`.
+ */
+function auditRun(plan: RunPlan, result: ExecuteResult): ExecuteResult {
+  const file = process.env.SANDBOX_AUDIT_LOG;
+  if (file) {
+    try {
+      const event = result.canaryHits.length ? 'canary.exfil' : result.deniedHosts.length ? 'egress.denied' : 'run';
+      appendAudit(
+        file,
+        event,
+        {
+          argv: plan.argv.join(' '),
+          code: result.code,
+          ...(result.deniedHosts.length ? { deniedHosts: result.deniedHosts } : {}),
+          ...(result.canaryHits.length ? { canaryHits: result.canaryHits } : {}),
+        },
+        { now: new Date() },
+      );
+    } catch {
+      /* best-effort: never let audit logging break the run */
+    }
+  }
+  return result;
 }
 
 export async function execute(
@@ -119,11 +194,19 @@ export async function execute(
   try {
     if (policy.useEgressProxy) {
       const denied: string[] = [];
+      const canaryHits: string[] = [];
       const code = await backend.withEgress(
         plan.egressAllow,
-        ({ network, proxyEnv }) => backend.runPlan(plan, { network, extraEnv: proxyEnv }),
+        // Plant the canary honeytokens alongside the proxy env so a credential-harvester finds them.
+        ({ network, proxyEnv }) => backend.runPlan(plan, { network, extraEnv: { ...proxyEnv, ...opts.canary?.env } }),
         (hosts) => denied.push(...hosts),
+        opts.canary ? (logText) => canaryHits.push(...scanCanaryLog(logText, opts.canary!).map((h) => h.line)) : undefined,
       );
+      if (canaryHits.length) {
+        // Unambiguous: a value we planted — one with no legitimate use — reached a request the proxy
+        // could see. This is an exfiltration attempt caught in the act, not a maybe-benign denied host.
+        log.error('CANARY TRIPPED — a planted honeytoken credential left the sandbox; treat this as a live exfiltration attempt', { lines: canaryHits.slice(0, 5) });
+      }
       if (denied.length) {
         // What happened: a dependency tried to reach a host that isn't allowlisted.
         log.warn(`sandbox blocked ${denied.length} network request(s) to host(s) not on your egress allowlist`, { hosts: denied });
@@ -135,13 +218,16 @@ export async function execute(
           log.info(`Config preview:\n${renderAllowlistSnippet(plan.egressAllow, add)}`);
           log.info('Or run this once with full network (no allowlist): re-run with --full-network');
         }
-        if (opts.failOnEgress) return { code: code === 0 ? 1 : code, deniedHosts: denied };
+        if (opts.failOnEgress) return auditRun(plan, { code: code === 0 ? 1 : code, deniedHosts: denied, canaryHits });
       }
-      return { code, deniedHosts: denied };
+      // A canary hit is proof of theft, so it fails the run unconditionally — unlike a denied host
+      // (which can be benign, e.g. nodejs.org headers), there's no innocent reason a honeytoken leaks.
+      const finalCode = canaryHits.length && code === 0 ? 1 : code;
+      return auditRun(plan, { code: finalCode, deniedHosts: denied, canaryHits });
     }
     // isolate -> `--network none`; otherwise the default bridge (no explicit --network).
     const network = policy.isolate ? 'none' : undefined;
-    return { code: await backend.runPlan(plan, { network }), deniedHosts: [] };
+    return auditRun(plan, { code: await backend.runPlan(plan, { network }), deniedHosts: [], canaryHits: [] });
   } finally {
     if (workspaceRoot && before && kind !== 'other') {
       const changes = summarizeUnexpectedChanges(before, snapshotTree(workspaceRoot), kind);

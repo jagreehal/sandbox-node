@@ -590,4 +590,39 @@ describe('cli (golden, no docker)', () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/invalid config/i);
   });
+
+  describe('verify --sign (signed receipt scope)', () => {
+    const GREEN = '{ "install": { "network": "allowlist" }, "run": { "network": "none" }, "egress": { "allow": ["npmjs.org"] } }';
+
+    // A private signing key written OUTSIDE the scanned project (so --secrets doesn't flag the key itself).
+    async function keyFile(dir: string): Promise<string> {
+      const { stdout } = await runCli(dir, ['--json', 'keygen']);
+      const key = (JSON.parse(stdout) as { privateKeyPem: string }).privateKeyPem;
+      const file = path.join(dir, 'signing-key.pem');
+      writeFileSync(file, key);
+      return file;
+    }
+
+    it('signs a clean repo and the receipt records the checks it attests', async () => {
+      const dir = fixture({ 'sandbox.config.json': GREEN });
+      const proj = fixture({ 'sandbox.config.json': GREEN }); // separate dir to scan (no key file inside)
+      const { code, stdout } = await runCli(proj, ['verify', '--sign', '--secrets'], { SANDBOX_SIGNING_KEY: await keyFile(dir) });
+      expect(code).toBe(0);
+      const receipt = JSON.parse(stdout) as { alg: string; payload: { checks: string[] } };
+      expect(receipt.alg).toBe('ed25519');
+      expect(receipt.payload.checks).toEqual(['boundary', 'secrets']);
+    });
+
+    it('REFUSES to sign when --secrets finds a committed credential (no receipt on stdout)', async () => {
+      const proj = fixture({
+        'sandbox.config.json': GREEN,
+        '.env': 'OPENAI_API_KEY=sk-' + 'z'.repeat(40) + '\n',
+      });
+      const keyDir = fixture({});
+      const { code, stdout, stderr } = await runCli(proj, ['verify', '--sign', '--secrets'], { SANDBOX_SIGNING_KEY: await keyFile(keyDir) });
+      expect(code).toBe(1);
+      expect(stdout.trim()).toBe(''); // critically: NO signed "green" receipt was emitted
+      expect(stderr).toMatch(/not signing/);
+    });
+  });
 });

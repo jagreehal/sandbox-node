@@ -161,6 +161,7 @@ commands hit the real tool untouched.
 | `--allow-recent <pat>` | Exempt a package-name pattern from the age gate (repeatable; globs ok, e.g. `@scope/*`). |
 | `--deep` | Apply the age gate to the whole resolved tree (lockfile), not just direct deps. |
 | `--risk <off\|basic>` | Disable/enable registry risk hints. |
+| `--canaries` / `--no-canaries` | Plant fake AWS/Stripe/Slack honeytokens in the install container and fail the run if one reaches the egress proxy log — a credential-theft tripwire on top of default-deny egress. Allowlist egress only; **on by default in the `strict`/`agent` presets**. Names no package manager reads, so it can't break an install; `--no-canaries` turns it off for one run. Applies to the real install, not the `preflight` review pass. |
 | `--dry-run` | Preview mounts/allowlist/command, then stop. On `install`/`add`/`run` this **skips the preflight**; use the `preflight` command for the review pass instead. |
 | `--json` | On `preflight`, prints the findings report (above). On `install`/`add`/`run`, prints the resolved plan and skips the preflight. |
 
@@ -194,5 +195,6 @@ Output shapes to recognize:
 
 Even on "proceed," the install runs jailed: persistence paths (`.git`, `.github`, `.husky`,
 `.claude`, …) and `package.json` are read-only, no host creds are mounted, and egress is
-default-deny (registry-only allowlist). The prompt is a "spend the risk?" decision, not the
-only thing between the user and a bad package — containment is the backstop.
+default-deny (registry-only allowlist). Under the `strict`/`agent` presets, canary honeytokens
+also ride along, so an exfiltration attempt is caught in the act. The prompt is a "spend the
+risk?" decision, not the only thing between the user and a bad package — containment is the backstop.

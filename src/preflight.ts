@@ -1,4 +1,5 @@
 import { advisoriesForPackages, advisoriesForResolved, createAdvisoryClient, type AdvisoryClient, type AdvisoryHit } from './advisory.js';
+import { matchKnownBad, type KnownBadEntry, type KnownBadHit } from './known-bad.js';
 import {
   createRegistryClient,
   expiredDomainHints,
@@ -49,6 +50,8 @@ export interface PreflightResult {
   hints: RiskHint[];
   ageViolations: ReleaseAgeViolation[];
   advisoryHits: AdvisoryHit[];
+  /** Packages matched by the local blocklist / malware feeds — ALWAYS block (explicit team decision). */
+  knownBadHits: KnownBadHit[];
   /** Number of direct targets actually resolved (for the "checked N packages" line). */
   checkedCount: number;
   /** Number of resolved packages the deep gate examined, when `deep` ran. */
@@ -67,6 +70,8 @@ export interface PreflightContext {
   nsResolver?: NsResolver;
   /** Override the downloads client used by the low-downloads signal (tests). */
   downloadsClient?: DownloadsClient;
+  /** Local blocklist + cached malware-feed entries to match against (always-block, OSV-independent). */
+  knownBad?: KnownBadEntry[];
 }
 
 function nothingToDo(policy: PreflightPolicy): boolean {
@@ -97,8 +102,10 @@ async function networkSignals(resolved: ResolvedTarget[], ctx: PreflightContext)
  * surface, and the CLI shell decides what to print and what blocks.
  */
 export async function runPreflight(targets: RiskTarget[], policy: PreflightPolicy, ctx: PreflightContext): Promise<PreflightResult> {
-  const result: PreflightResult = { hints: [], ageViolations: [], advisoryHits: [], checkedCount: 0 };
-  if (nothingToDo(policy)) return result;
+  const result: PreflightResult = { hints: [], ageViolations: [], advisoryHits: [], knownBadHits: [], checkedCount: 0 };
+  const knownBad = ctx.knownBad ?? [];
+  const wantKnownBad = knownBad.length > 0;
+  if (nothingToDo(policy) && !wantKnownBad) return result;
 
   const now = ctx.now ?? new Date();
   const registry = ctx.registryClient ?? createRegistryClient();
@@ -107,7 +114,7 @@ export async function runPreflight(targets: RiskTarget[], policy: PreflightPolic
   // Read the lockfile tree up front when ANY deep-able gate is requested — release age, deprecation,
   // or malware. An empty tree (no lockfile, or bun, which has no parser) falls the gates back to the
   // direct targets so `--deep` never silently disables them.
-  const wantDeep = policy.deep && (wantAge || policy.riskHints || policy.advisories);
+  const wantDeep = policy.deep && (wantAge || policy.riskHints || policy.advisories || wantKnownBad);
   let deepPackages: LockfilePackage[] | undefined;
   if (wantDeep) {
     try {
@@ -120,7 +127,9 @@ export async function runPreflight(targets: RiskTarget[], policy: PreflightPolic
   }
   const useDeep = wantDeep && (deepPackages?.length ?? 0) > 0;
   const directAgeGate = wantAge && !useDeep; // direct when not deep, or when deep found no tree
-  const needDirectResolve = policy.riskHints || policy.advisories || directAgeGate;
+  // Known-bad matches the deep tree when available, else the direct targets — so resolve direct when
+  // there's no deep tree to cover it (a version-specific blocklist entry needs the resolved version).
+  const needDirectResolve = policy.riskHints || policy.advisories || directAgeGate || (wantKnownBad && !useDeep);
 
   if (needDirectResolve && targets.length) {
     try {
@@ -144,6 +153,8 @@ export async function runPreflight(targets: RiskTarget[], policy: PreflightPolic
       if (policy.advisories && !useDeep) {
         result.advisoryHits = await advisoriesForResolved(resolved, ctx.advisoryClient ?? createAdvisoryClient());
       }
+      // Known-bad over the direct targets when deep won't cover the tree.
+      if (wantKnownBad && !useDeep) result.knownBadHits = matchKnownBad(resolved, knownBad);
     } catch {
       // fail open — a resolution error leaves the (empty) findings and the caller proceeds.
     }
@@ -175,6 +186,8 @@ export async function runPreflight(targets: RiskTarget[], policy: PreflightPolic
         // fail open
       }
     }
+    // Known-bad over the whole tree (offline, no lookups) — a superset of the direct match.
+    if (wantKnownBad) result.knownBadHits = matchKnownBad(deepPackages!, knownBad);
   }
 
   return result;

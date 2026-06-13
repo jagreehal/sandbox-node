@@ -3,10 +3,10 @@ import path from 'node:path';
 import { createBackend, sandboxImageUpToDate } from './backend.js';
 import { capture, quiet } from './exec.js';
 import { readConfig, type SandboxConfig } from './config.js';
-import { resolveBuildSpec } from './image.js';
+import { resolveBaseImage, resolveBuildSpec } from './image.js';
 import { lockfileName, lockfilePresent, resolvePackageManager } from './package-manager.js';
 import { registryDiagnostics, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
-import { runtimeVulnerabilities } from './runtime-cve.js';
+import { nodeEolStatus, runtimeVulnerabilities } from './runtime-cve.js';
 
 export interface DoctorOptions {
   config?: string;
@@ -187,6 +187,21 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
         label: 'policy',
         detail: `install=${config.install.network}${config.install.frozen ? ', frozen' : ''}; run=${config.run.network}`,
       });
+
+      // The Node line the sandbox image runs on. An EOL line means lifecycle scripts execute on a
+      // runtime that no longer receives security fixes. Only checked when the base is a numeric
+      // `node:<major>` tag and the security layers still apply (a custom Dockerfile owns its own base).
+      if (!config.build.customDockerfileUnsafe) {
+        const nodeMajor = /node:(\d+)/.exec(resolveBaseImage(config.build))?.[1];
+        if (nodeMajor) {
+          const eol = nodeEolStatus(Number(nodeMajor));
+          if (eol.status === 'eol') {
+            checks.push({ level: 'info', label: 'node runtime', detail: `image uses Node ${nodeMajor}, which reached end-of-life on ${eol.eol} (no more security fixes)`, fixes: ['bump build.nodeVersion (or build.baseImage) to a maintained line, then `sandbox build`'] });
+          } else if (eol.status === 'active') {
+            checks.push({ level: 'ok', label: 'node runtime', detail: `Node ${nodeMajor} (maintained until ${eol.eol})` });
+          }
+        }
+      }
     }
   }
 

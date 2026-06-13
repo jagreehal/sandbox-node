@@ -55,6 +55,12 @@ export const SandboxConfigSchema = z
         // Different axis from the age gate: "known bad" rather than "too new". Advisory lookups
         // run when riskHints is on; this turns a malware hit into a hard preflight failure.
         failOnAdvisory: z.boolean().default(false),
+        // Extra known-malware FEEDS to augment OSV: a list of URLs (e.g. Aikido's public malware
+        // database) fetched by `sandbox feeds update` and cached locally. Any package matched by a
+        // feed ALWAYS blocks an install — feeds are an explicit team decision, not gated by
+        // failOnAdvisory — and run with no network latency at install time (the cache is local).
+        // OSV has publish lag; a second feed widens the net on the one check that matters most.
+        malwareFeeds: z.array(z.string()).default([]),
         // Refuse to install a version the maintainer has DEPRECATED. A deprecated version is
         // abandoned — it won't get security fixes and is a standing supply-chain risk — so we
         // never resolve to one. On by default; `--allow-deprecated` overrides for one run. Rides
@@ -65,9 +71,17 @@ export const SandboxConfigSchema = z
         // the sandbox. Ergonomic, not a boundary: the install container is still throwaway; only
         // the integrity-checked cache survives. Set false for a fully cold, hermetic install.
         cache: z.boolean().default(true),
+        // Plant CANARY honeytokens (fake AWS/Stripe/Slack credentials) in the install container's
+        // environment and watch the egress proxy for them. The default-deny boundary blocks exfil;
+        // canaries turn a blocked request into PROOF of intent — if a planted token shows up in the
+        // proxy log, a script tried to steal credentials. Off by default (it's a tripwire, not a
+        // boundary); only active in allowlist egress mode, where there's a proxy log to watch. A
+        // canary hit fails the run unconditionally. None of the planted names are read by npm/pnpm/
+        // yarn/bun, so this can't break a real install.
+        canaries: z.boolean().default(false),
       })
       .strict()
-      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, failOnDeprecated: true, cache: true }),
+      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: false }),
     egress: z
       .object({ allow: z.array(z.string()).default(['npmjs.org', 'npmjs.com']) })
       .strict()
@@ -276,10 +290,12 @@ function boundaryLooseningWarnings(eff: SandboxConfig, base: SandboxConfig): str
     if (extra.length) w.push(`grants.${key} added ${extra.join(', ')} beyond team config`);
   }
   if (!eff.install.frozen && base.install.frozen) w.push('install.frozen disabled (team config requires reproducible installs)');
-  for (const flag of ['failOnRisk', 'failOnAdvisory', 'failOnDeprecated'] as const) {
+  for (const flag of ['failOnRisk', 'failOnAdvisory', 'failOnDeprecated', 'canaries'] as const) {
     if (!eff.install[flag] && base.install[flag]) w.push(`install.${flag} disabled beyond team config`);
   }
   if (eff.install.minReleaseAgeDays < base.install.minReleaseAgeDays) w.push(`install.minReleaseAgeDays lowered to ${eff.install.minReleaseAgeDays} (team config: ${base.install.minReleaseAgeDays})`);
+  const droppedFeeds = base.install.malwareFeeds.filter((f) => !eff.install.malwareFeeds.includes(f));
+  if (droppedFeeds.length) w.push(`install.malwareFeeds dropped ${droppedFeeds.join(', ')} (removed by a personal layer)`);
   if (eff.build.customDockerfileUnsafe && !base.build.customDockerfileUnsafe) w.push('build.customDockerfileUnsafe set by a personal layer — the sandbox boundary is no longer verified');
   return w;
 }

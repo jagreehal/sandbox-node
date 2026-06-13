@@ -58,6 +58,8 @@ export async function withEgress<T>(
   fn: (handle: EgressHandle) => Promise<T>,
   /** Called before teardown with any hosts the proxy refused (the tripwire). */
   onDenials?: (hosts: string[]) => void,
+  /** Called before teardown with the proxy's full log text (for canary-token scanning). */
+  onLog?: (logText: string) => void,
 ): Promise<T> {
   const id = `${process.pid}-${randomUUID().slice(0, 8)}`;
   const internal = `sbx_int_${id}`;
@@ -85,11 +87,16 @@ export async function withEgress<T>(
     await waitRunning(bin, proxy);
     return await fn({ network: internal, proxyEnv });
   } finally {
-    if (onDenials) {
-      // Read what the proxy refused BEFORE we tear it down.
+    if (onDenials || onLog) {
+      // Read the proxy's log BEFORE we tear it down — it holds both the refusals and the request
+      // lines a canary nonce would surface in.
       const logs = await capture(bin, ['logs', proxy]);
-      const denied = parseEgressDenials(`${logs.stdout}\n${logs.stderr}`);
-      if (denied.length) onDenials(denied);
+      const text = `${logs.stdout}\n${logs.stderr}`;
+      if (onLog) onLog(text);
+      if (onDenials) {
+        const denied = parseEgressDenials(text);
+        if (denied.length) onDenials(denied);
+      }
     }
     await quiet(bin, ['rm', '-f', proxy]);
     await quiet(bin, ['network', 'rm', internal, egress]);

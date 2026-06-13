@@ -1,8 +1,9 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verifyConfig } from '../src/verify.js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { runAuditVerify, runKeygen, signVerifyReceipt, verifyConfig } from '../src/verify.js';
+import { appendAudit, generateSigningKey, verifyReceipt, type AuditEntry } from '../src/receipt.js';
 
 /** A project dir with a committed config (+ optional personal local override). Returns the dir. */
 function project(json: string, local?: string): string {
@@ -68,5 +69,53 @@ describe('verifyConfig', () => {
     const res = verifyConfig(dir, configIn(dir));
     expect(res.ok).toBe(false);
     expect(res.problems[0]).toMatch(/invalid config/i);
+  });
+});
+
+describe('signVerifyReceipt', () => {
+  const now = new Date(Date.UTC(2026, 5, 13));
+
+  it('signs a green boundary and records the exact checks it attests', () => {
+    const dir = project('{ "install": { "network": "allowlist" }, "run": { "network": "none" } }');
+    const { privateKeyPem } = generateSigningKey();
+    const receipt = signVerifyReceipt(dir, privateKeyPem, { configPath: configIn(dir), now, checks: ['boundary', 'scan'] });
+    expect(receipt).not.toBeNull();
+    expect(receipt!.payload.checks).toEqual(['boundary', 'scan']); // scope is explicit, not implied
+    expect(verifyReceipt(receipt!).ok).toBe(true);
+  });
+
+  it('refuses to sign when the boundary itself does not verify', () => {
+    const dir = project('{ "run": { "network": "none" } }', '{ "run": { "network": "on" } }'); // loosened
+    const { privateKeyPem } = generateSigningKey();
+    expect(signVerifyReceipt(dir, privateKeyPem, { configPath: configIn(dir), now, checks: ['boundary'] })).toBeNull();
+  });
+});
+
+describe('runKeygen / runAuditVerify (extracted CLI handlers — now unit-testable)', () => {
+  it('runKeygen --json prints a usable keypair', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(runKeygen({ json: true })).toBe(0);
+      const out = JSON.parse(spy.mock.calls[0]![0] as string) as { fingerprint: string; publicKeyPem: string; privateKeyPem: string };
+      expect(out.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+      // The printed private key actually signs a verifiable receipt.
+      expect(verifyReceipt(signVerifyReceipt(project('{ "run": { "network": "none" } }'), out.privateKeyPem, { now: new Date(), checks: ['boundary'] })!).ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('runAuditVerify returns 0 for an intact chain and 1 once a line is tampered', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-auditcmd-'));
+    const log = path.join(dir, 'audit.jsonl');
+    appendAudit(log, 'run', { code: 0 }, { now: new Date(Date.UTC(2026, 5, 13, 0, 0, 0)) });
+    appendAudit(log, 'egress.denied', { host: 'evil.com' }, { now: new Date(Date.UTC(2026, 5, 13, 0, 0, 1)) });
+    expect(runAuditVerify(log, { json: true })).toBe(0);
+
+    const lines = readFileSync(log, 'utf8').trimEnd().split('\n');
+    const first = JSON.parse(lines[0]!) as AuditEntry;
+    first.detail = { code: 1 };
+    writeFileSync(log, `${JSON.stringify(first)}\n${lines[1]}\n`);
+    expect(runAuditVerify(log, { json: true })).toBe(1);
   });
 });

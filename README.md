@@ -341,12 +341,18 @@ Sandbox commands:
   delta [--base <ref>] gate ONLY the dependency changes a PR introduces: diff the lockfile
                        against <ref> (default origin/main) and run the release-age, malware,
                        and deprecation gates on added/bumped versions. Fast, low-noise PR check.
+  secrets [path]       offline scan for committed credentials (keys, tokens, private keys, db
+                       URLs). Read-only; exits non-zero on any finding. Matches are redacted.
+  feeds <update|list>  manage malware feeds (install.malwareFeeds): update fetches + caches them
+                       offline; list shows configured/cached feeds. A package on a feed (or in
+                       sandbox.advisories.json) ALWAYS blocks installs.
   upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates),
                        not just within the range. Your release-age gate drives ncu's --cooldown,
                        proposals go through the same gates as install, and --write rewrites
                        package.json then installs in the sandbox (--minor/--patch/--reject to scope)
-  verify [--scan]      exit non-zero unless the repo commits a real sandbox boundary and
-                       no personal layer has loosened it — the CI gate behind the badge
+  verify [--scan]      exit non-zero unless the repo commits a real sandbox boundary and no
+       [--secrets]     personal layer has loosened it — the CI gate behind the badge. --scan
+                       adds the malware sweep; --secrets fails on a committed credential
   badge [--workflow F] print a "sandboxed" markdown badge. Bare = static provenance badge;
                        --workflow sandbox.yml = CI-backed verified badge
   devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
@@ -401,7 +407,7 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox setup` | One-button onboarding. Writes `sandbox.config.json` if needed, checks Docker, builds images if needed, then prints the next commands. |
 | `sandbox allow <host...>` | Add host(s) to `egress.allow` for this repo. Use it when a trusted install needs something like `nodejs.org` or a private registry host. |
 | `sandbox path [install\|uninstall\|status\|print]` | Install shell wrappers (zsh/bash/fish/pwsh) so a bare `npm/pnpm/yarn/bun install` and `npx`/`bunx` route through `sandbox` automatically — the human equivalent of the agent hook. Wraps the package-manager front-ends via shell functions (not a `$PATH` change). Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`. See [Make it automatic](#make-it-automatic-sandbox-path-the-human-prefix-guard). |
-| `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
+| `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, flags a container-escape CVE in the runtime and an end-of-life Node line in the sandbox image, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
 | `sandbox install [args]` | Expert form of the install model. Most users should use `sandbox npm install`, `sandbox pnpm install`, or `sandbox yarn install`. Persistence paths and `package.json` stay read-only. The project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates. Host credentials stay out. `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. |
 | `sandbox add <pkg...>` | Expert form of the add model. Most users should use `sandbox npm install <pkg>` or `sandbox pnpm add <pkg>`. This model keeps the same isolation as `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. |
 | `sandbox run -- <cmd>` | Expert form of the run model. Most users should use `sandbox npm test`, `sandbox npm run dev`, `sandbox npx <tool>`, or similar. `run.network` defaults to `none`. |
@@ -409,8 +415,14 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox preflight [pm cmd]` | Supply-chain review WITHOUT installing. Runs the same gates as a real install (release-age, malware, deprecation, risk hints), prints every finding + a pin suggestion per blocked package, and exits non-zero exactly when that install would be blocked. Use `--json` for a structured report. |
 | `sandbox scan` | Retroactive malware sweep over the committed lockfile. Re-queries OSV for every resolved version and exits non-zero if any installed dep is NOW flagged as malware — catches deps that turned malicious after you installed them. No container needed; cheap enough for cron. |
 | `sandbox delta [--base <ref>]` | Gate only the dependency changes a PR introduces. Diffs the lockfile against `<ref>` (default `origin/main`) and runs the release-age, malware, and deprecation gates over just the added/bumped versions. Fails safe when the base lockfile is unreadable. Fast, low-noise PR preflight. |
+| `sandbox secrets [path]` | Offline scan for committed credentials (~40 provider patterns — API keys, tokens, private keys, database URLs with passwords). Checksum/decode validation (Luhn, JWT header decode) drops false positives, and an entropy fallback catches secret-ish values with no known shape. Read-only, no container; exits non-zero on any finding, so it doubles as a CI tripwire. Matched values are redacted — it reports *where*, never the secret. Defaults to the project root. See [Catch committed secrets](#catch-committed-secrets-sandbox-secrets). |
+| `sandbox demo` | Run real supply-chain attacks (credential theft, persistence hook, IMDS pivot, egress exfil) against the live sandbox in a **throwaway** project and show each one contained. No mocks — every attack goes through the same execute path a real install uses. Exits non-zero if any attack isn't contained. See [Watch it work](#watch-it-work-sandbox-demo). |
+| `sandbox feeds <update\|list>` | Manage malware **feeds** (`install.malwareFeeds`). `update` fetches the configured feed URLs and caches them locally so the install-time blocklist check stays offline; `list` shows what's configured and cached. A package on a feed — or in a committed `sandbox.advisories.json` — **always blocks** installs, independent of the OSV network lookup. See [Your own blocklist](#your-own-blocklist-team-advisories--malware-feeds). |
 | `sandbox upgrade [--write]` | Move declared dependency **ranges** to newer versions (wraps `npm-check-updates`) — what `sandbox npm update` won't do (it stays within the range). Your `minReleaseAgeDays` drives ncu's `--cooldown` automatically, so you only see versions that have aged in; the proposed versions then pass through the **same** malware/deprecation/age gates as install. Without `--write` it previews a gated table; with `--write` it rewrites `package.json` and installs in the sandbox. Scope the jump with `--minor`/`--patch`/`--target`, skip packages with `--reject <pat>`. |
-| `sandbox verify [--scan]` | Exit non-zero unless this repo commits a real sandbox boundary and no personal layer has loosened it. With `--scan`, also runs the retroactive malware sweep. The CI gate behind the verified badge. |
+| `sandbox verify [--scan] [--secrets] [--sign]` | Exit non-zero unless this repo commits a real sandbox boundary and no personal layer has loosened it. With `--scan`, also runs the retroactive malware sweep; with `--secrets`, also fails if a credential is committed; with `--sign`, emits an Ed25519-signed receipt of the green boundary to stdout (needs `SANDBOX_SIGNING_KEY`). The CI gate behind the verified badge. See [Signed receipts](#signed-receipts--tamper-evident-audit-log). |
+| `sandbox verify-receipt <file>` | Verify a signed receipt from `verify --sign`. `--fingerprint <hex>` (or `SANDBOX_TRUSTED_KEY`) pins the signer so a valid signature from any other key is rejected. |
+| `sandbox keygen` | Generate an Ed25519 signing keypair: store the private key as a CI secret (`SANDBOX_SIGNING_KEY`), pin the printed fingerprint via `SANDBOX_TRUSTED_KEY`. |
+| `sandbox audit verify <log>` | Verify a hash-chained audit log is intact — every entry recomputes and links to the previous, so any altered or removed entry is caught. Set `SANDBOX_AUDIT_LOG=<path>` on any run to append tamper-evident events (`run`, `egress.denied`, `canary.exfil`). |
 | `sandbox badge [--workflow F]` | Print a markdown badge for the README. Bare = static provenance badge; `--workflow sandbox.yml` = CI-backed verified badge that links to real evidence. |
 | `sandbox devcontainer init` | Generate a `.devcontainer/` from the same `sandbox.config.json` so the persistent form inherits the same hardening. Add `--force` to overwrite. |
 
@@ -575,6 +587,144 @@ It needs no container (a read-only OSV lookup), so it's cheap to run on a schedu
 or fold it into the boundary gate with `sandbox verify --scan` so a green check means *boundary
 intact **and** no installed dependency is currently flagged as malware*. Like the install-time check
 it fails open per package on a lookup error, and reports non-malware advisories as warnings.
+
+### Your own blocklist (team advisories + malware feeds)
+
+OSV has publish lag, and the release-age gate only buys you a few days. When *you* already know a
+package is bad — an internal incident, a feed you trust, a maintainer you no longer do — you don't
+want to wait for OSV. Two offline sources let you block immediately, and a match from either **always
+blocks** (install, `preflight`, `scan`, `delta`, and `upgrade`), independent of `--fail-on-advisory`:
+
+- **Team advisories** — drop a committed `sandbox.advisories.json` in the repo root (a per-user global
+  one lives at `$XDG_CONFIG_HOME/sandbox-node/advisories.json`). No config needed:
+
+  ```jsonc
+  {
+    "advisories": [
+      { "name": "left-pad", "reason": "internal: do not use", "severity": "high" },
+      { "name": "evil-pkg", "versions": ["6.6.6"], "reason": "compromised release" }
+    ]
+  }
+  ```
+
+  A name with no `versions` blocks every version; with `versions` it blocks only those exact cuts.
+
+- **Malware feeds** — list feed URLs in `install.malwareFeeds`, then run `sandbox feeds update` to
+  fetch and cache them locally. The install-time check reads the cache, so it stays offline and fast.
+  Feeds **augment** OSV (which has publish lag); they don't replace it.
+
+  ```jsonc
+  // sandbox.config.json — Aikido's public npm malware list
+  { "install": { "malwareFeeds": ["https://malware-list.aikido.dev/malware_predictions.json"] } }
+  ```
+
+  ```bash
+  sandbox feeds update          # fetch + cache the configured feeds
+  sandbox feeds list            # show configured + cached feeds
+  ```
+
+  Feeds parse the common shapes — a JSON array of names; objects keyed by `name` **or `package_name`**
+  (Aikido's field) with optional `version`/`reason`; a `{ "packages": [...] }` wrapper; or a
+  `name,version` CSV. A `*` version blocks every version. A dead feed URL is reported and skipped —
+  it never aborts the rest.
+
+### Catch committed secrets (`sandbox secrets`)
+
+The sandbox keeps your host credentials *out* of the install container, but it can't stop a key being
+committed into the repo itself — and the moment you `--env-from` a file or grant a path, that secret
+is in scope. `sandbox secrets` is the visibility half: a fast, offline scan for high-signal credential
+shapes (cloud keys, provider tokens, private keys, database URLs with passwords).
+
+```bash
+sandbox secrets               # scan the repo; exit non-zero on any finding
+sandbox --json secrets        # machine-readable (for CI)
+sandbox verify --secrets      # fold it into the boundary gate
+```
+
+It's deliberately high-precision (a provider's distinctive token shape, not every random string),
+skips `node_modules`/`.git`/build output/lockfiles/binaries, and **redacts** every match — it reports
+the file and line, never the secret. Exiting non-zero makes it a drop-in CI tripwire. Rotate any real
+key it finds, move it to an env var, and add the file to `.gitignore`.
+
+Under the hood it carries ~40 provider patterns (cloud keys, source-control tokens, AI-provider keys,
+Vault/Vercel/Notion/Linear/…), with two precision tools borrowed from dedicated scanners: **checksum/
+decode validation** (a candidate payment-card number must pass Luhn; a `eyJ…` blob must base64-decode
+to a real JWT header) drops matches that only *look* right, and an **entropy fallback** flags a
+high-randomness value assigned to a secret-ish name (`dbPassword`, `accessToken`) even when the
+provider isn't one we hardcode. A bare hex digest or a data-URI blob is *not* flagged — the fallback
+needs both high entropy and a credential-shaped key, so it stays quiet on ordinary code.
+
+### Canary honeytokens (catch exfiltration in the act)
+
+Default-deny egress *blocks* a credential from leaving; canaries tell you a thief *tried*. With
+canaries on, the sandbox plants fake-but-realistic AWS/Stripe/Slack credentials in the install
+container's environment — exactly what a supply-chain script greps `process.env` for — each carrying a
+unique nonce. If that nonce ever shows up in the egress proxy's log, a value we planted (one with no
+legitimate use) left the box: unambiguous proof of theft, and the run fails hard.
+
+```bash
+sandbox --canaries npm install        # plant honeytokens for this install
+# on by default in the strict and agent presets
+```
+
+Honest scope, because it matters: the proxy can see the request line of **plaintext HTTP** requests
+(URL + query) and the **host** of HTTPS `CONNECT`s — so a canary leaked in an HTTP request or used as a
+hostname is caught. A canary smuggled inside an *encrypted* HTTPS body to an allowlisted host is **not**
+visible to the canary — that case is the egress allowlist's job. Canaries are a tripwire on top of the
+boundary, not a replacement for it. The planted env-var names are ones no package manager reads, so
+turning them on can't break a real install.
+
+## Watch it work (`sandbox demo`)
+
+`sandbox demo` runs four real supply-chain attacks against the live sandbox — in a throwaway project,
+never your repo — and shows each bouncing off a different control:
+
+```text
+▶ Plant a git hook (persistence)
+    ✓ CONTAINED by persistence paths (.git/.husky/…) are mounted read-only
+▶ Steal host credentials
+    ✓ CONTAINED by the container starts with none of your host credentials mounted
+▶ Pivot to cloud metadata (IMDS)
+    ✓ CONTAINED by the metadata guard blackholes the IMDS endpoints
+▶ Exfiltrate a secret over the network
+    ✓ CONTAINED by default-deny egress (canaries name the stolen value)
+demo: all 4 attack(s) contained — the sandbox held on every control
+```
+
+No mocks: every attack runs through the same execute path a real install uses, and the command exits
+non-zero if anything isn't contained — so it doubles as a CI smoke test that the boundary still holds.
+
+## Signed receipts & tamper-evident audit log
+
+Two ways to turn "the boundary held" into evidence a third party can check, both built on `node:crypto`
+(no new dependencies):
+
+**Signed verify receipt** — `sandbox verify --sign` proves a *green* result and signs it with an
+Ed25519 key the agent/CI never has to expose, so a later stage can confirm it without re-running the
+gate. It composes with `--scan`/`--secrets`: those gates run first, the receipt is emitted **only if
+every one passes**, and its `checks` field records exactly what was attested (`boundary`, and `scan`/
+`secrets` when requested) — so a receipt can never vouch for malware/secret cleanliness it didn't check.
+
+```bash
+sandbox keygen > keys.pem                                    # private key → CI secret; note the fingerprint
+SANDBOX_SIGNING_KEY=keys.pem sandbox verify --sign --scan --secrets > receipt.json
+sandbox verify-receipt receipt.json --fingerprint <pinned>   # rejects a valid sig from any other key
+```
+
+Pinning the fingerprint is what makes it a gate rather than a rubber stamp — without it, anyone could
+mint a receipt with their own key.
+
+**Hash-chained audit log** — set `SANDBOX_AUDIT_LOG=<path>` and every run appends a JSONL entry whose
+hash commits to the one before it. `sandbox audit verify <log>` recomputes the chain; any entry
+altered or removed in place is caught:
+
+```bash
+SANDBOX_AUDIT_LOG=.sandbox/audit.jsonl sandbox npm install
+sandbox audit verify .sandbox/audit.jsonl
+```
+
+The chain proves *internal* consistency (no past entry was rewritten); it doesn't stop someone
+discarding the whole file and starting over — for that, pin the latest hash out of band.
 
 ## Quick Start
 
@@ -1135,6 +1285,8 @@ Everything starts off.
     "minReleaseAgeDays": 0,    // >0 = block versions published fewer than N days ago
     "minReleaseAgeExclude": [], // ["@myscope/*"] — names exempt from the age gate
     "failOnAdvisory": false,   // true = block versions flagged as malware in OSV
+    "malwareFeeds": [],        // URLs of extra malware feeds; `sandbox feeds update` caches them.
+                               // A feed/advisories.json match ALWAYS blocks (independent of OSV).
     "cache": true              // persist the PM download cache in a shared volume across runs
                                // (content-addressed, so it can't be poisoned). false = cold install.
   },

@@ -72,8 +72,10 @@
         "minReleaseAgeDays": 0,
         "minReleaseAgeExclude": [],
         "failOnAdvisory": false,
+        "malwareFeeds": [],
         "failOnDeprecated": true,
-        "cache": true
+        "cache": true,
+        "canaries": false
       },
       "type": "object",
       "properties": {
@@ -120,12 +122,23 @@
           "default": false,
           "type": "boolean"
         },
+        "malwareFeeds": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "failOnDeprecated": {
           "default": true,
           "type": "boolean"
         },
         "cache": {
           "default": true,
+          "type": "boolean"
+        },
+        "canaries": {
+          "default": false,
           "type": "boolean"
         }
       },
@@ -137,8 +150,10 @@
         "minReleaseAgeDays",
         "minReleaseAgeExclude",
         "failOnAdvisory",
+        "malwareFeeds",
         "failOnDeprecated",
-        "cache"
+        "cache",
+        "canaries"
       ],
       "additionalProperties": false
     },
