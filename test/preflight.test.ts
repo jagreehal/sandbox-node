@@ -81,6 +81,26 @@ describe('runPreflight — single shared resolve', () => {
     });
     expect(result).toMatchObject({ hints: [], ageViolations: [], advisoryHits: [] });
   });
+
+  it('matches the local blocklist over the resolved direct target (runs even with every gate off)', async () => {
+    const { client, calls } = countingRegistry();
+    const result = await runPreflight([{ name: 'sharp', spec: '0.33.5' }], policy({ riskHints: false }), {
+      pm: 'npm', cwd: '/x', registryClient: client, now: NOW,
+      knownBad: [{ name: 'sharp', reason: 'team block', severity: 'high', source: 'sandbox.advisories.json' }],
+    });
+    expect(calls()).toBe(1); // resolves to get the version even though no other gate is on
+    expect(result.knownBadHits).toEqual([{ name: 'sharp', version: '0.33.5', reason: 'team block', severity: 'high', source: 'sandbox.advisories.json' }]);
+  });
+
+  it('matches the blocklist over the whole tree under --deep', async () => {
+    const { client } = countingRegistry();
+    const deepTree: LockfilePackage[] = [{ name: 'left-pad', version: '1.0.0' }, { name: 'evil', version: '6.6.6' }];
+    const result = await runPreflight([{ name: 'left-pad', spec: '' }], policy({ riskHints: false, deep: true }), {
+      pm: 'pnpm', cwd: '/x', registryClient: client, now: NOW, readLockfile: () => deepTree,
+      knownBad: [{ name: 'evil', source: 'feed' }],
+    });
+    expect(result.knownBadHits.map((h) => h.name)).toEqual(['evil']);
+  });
 });
 
 describe('suggestPins — concrete pin for each blocked package', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseVersion, runtimeVulnerabilities } from '../src/runtime-cve.js';
+import { nodeEolStatus, parseVersion, runtimeVulnerabilities } from '../src/runtime-cve.js';
 
 describe('parseVersion', () => {
   it('extracts the first dotted version from common runtime strings', () => {
@@ -41,5 +41,23 @@ describe('runtimeVulnerabilities', () => {
   it('reports nothing when neither version can be determined', () => {
     expect(runtimeVulnerabilities({})).toEqual([]);
     expect(runtimeVulnerabilities({ runc: 'deadbeef' })).toEqual([]);
+  });
+});
+
+describe('nodeEolStatus', () => {
+  const now = new Date('2026-06-13T00:00:00.000Z');
+
+  it('marks a line past its EOL date as eol', () => {
+    expect(nodeEolStatus(18, now)).toMatchObject({ status: 'eol', eol: '2025-04-30' });
+    expect(nodeEolStatus(20, now)).toMatchObject({ status: 'eol', eol: '2026-04-30' }); // EOL just passed
+  });
+
+  it('marks a still-maintained line as active', () => {
+    expect(nodeEolStatus(22, now)).toMatchObject({ status: 'active', eol: '2027-04-30' });
+    expect(nodeEolStatus(24, now)).toMatchObject({ status: 'active' });
+  });
+
+  it('returns unknown for a major not in the table (odd/pre-release)', () => {
+    expect(nodeEolStatus(23, now)).toEqual({ major: 23, status: 'unknown' });
   });
 });

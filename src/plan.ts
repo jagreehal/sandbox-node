@@ -94,7 +94,7 @@ function protectedPersistencePaths(config: SandboxConfig): string[] {
  * can't be created. The package manager still gets a writable root for lockfile /
  * temp writes — what every PM (notably pnpm) needs.
  */
-function protectionMounts(facts: ProjectFacts, config: SandboxConfig, opts: { protectManifest: boolean }): Mount[] {
+export function protectionMounts(facts: ProjectFacts, config: SandboxConfig, opts: { protectManifest: boolean }): Mount[] {
   const mounts: Mount[] = [];
   for (const p of protectedPersistencePaths(config)) {
     mounts.push(

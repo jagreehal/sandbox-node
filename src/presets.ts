@@ -28,7 +28,9 @@ export const PRESETS: Record<PresetName, Preset> = {
     // reproducible (frozen) install, turns on the release-age gate (refuse versions published
     // <7 days ago — the control the 2026-06-04 incident named most effective), runs the full
     // (thorough) risk-signal set, and blocks any version flagged as malware in OSV.
-    config: { install: { frozen: true, minReleaseAgeDays: 7, failOnAdvisory: true, riskHints: 'thorough' } },
+    // Canaries on: strict installs run registry-only, so the egress proxy is always watching — plant
+    // honeytokens so a credential-theft attempt is caught in the act, not just blocked anonymously.
+    config: { install: { frozen: true, minReleaseAgeDays: 7, failOnAdvisory: true, riskHints: 'thorough', canaries: true } },
   },
   balanced: {
     name: 'balanced',
@@ -53,8 +55,9 @@ export const PRESETS: Record<PresetName, Preset> = {
     label: 'Agent',
     hint: 'vibe + project-scoped AI config (./.claude-sandbox); 3-day release-age gate; host credentials blocked',
     // The AI-install path is higher risk (unattended `npm install`), so unlike vibe it keeps the
-    // blocking release-age gate on.
-    config: { install: { minReleaseAgeDays: 3 }, run: { network: 'on', devPorts: true }, grants: { claude: 'project' } },
+    // blocking release-age gate on — and plants canaries, since an unattended agent is exactly who
+    // you want a credential-theft tripwire watching. Installs are registry-only, so the proxy sees them.
+    config: { install: { minReleaseAgeDays: 3, canaries: true }, run: { network: 'on', devPorts: true }, grants: { claude: 'project' } },
   },
   trusted: {
     name: 'trusted',

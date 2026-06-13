@@ -46,6 +46,36 @@ const RUNC_EXE_OVERWRITE: RuntimeVuln = {
 };
 
 /**
+ * Node.js release end-of-life dates by MAJOR version. The runtime that executes a malicious install
+ * lives inside the sandbox image, so an EOL Node line there means lifecycle scripts run on a runtime
+ * that no longer gets security fixes — worth a `doctor` nudge. STATIC TABLE: it needs a periodic bump
+ * as the release schedule advances (odd majors are short-lived and intentionally omitted — treated as
+ * unknown). Dates from the Node.js release schedule.
+ */
+const NODE_EOL: Record<number, string> = {
+  16: '2023-09-11',
+  18: '2025-04-30',
+  20: '2026-04-30',
+  22: '2027-04-30',
+  24: '2028-04-30',
+};
+
+export interface NodeEolStatus {
+  major: number;
+  /** 'eol' = past end-of-life; 'active' = still maintained; 'unknown' = not in the table (e.g. odd/pre-release major). */
+  status: 'eol' | 'active' | 'unknown';
+  /** EOL date (ISO) when known. */
+  eol?: string;
+}
+
+/** Classify a Node major against the EOL table. `now` defaults to the current date. */
+export function nodeEolStatus(major: number, now: Date = new Date()): NodeEolStatus {
+  const eol = NODE_EOL[major];
+  if (!eol) return { major, status: 'unknown' };
+  return { major, status: now.getTime() > new Date(`${eol}T23:59:59Z`).getTime() ? 'eol' : 'active', eol };
+}
+
+/**
  * Assess known container-escape CVEs. Prefers the runc version when it's a real
  * semver; otherwise (e.g. `docker info` reports a commit hash) falls back to the
  * Docker engine version, which bundles a known runc. Engine-version mapping is

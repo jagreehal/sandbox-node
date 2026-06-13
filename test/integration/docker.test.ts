@@ -143,6 +143,17 @@ describe.skipIf(!hasDocker)('docker integration', () => {
     const result = spawnSync(process.execPath, [runner, '--real'], { encoding: 'utf8', stdio: 'inherit' });
     expect(result.status).toBe(0);
   });
+
+  // The real-execution path for `sandbox demo`: every attack runs in an actual container through the
+  // same execute()/planRun() path a real install uses. Deterministic offline — the egress scenario's
+  // host is refused by the proxy filter (no DNS needed) and the IMDS probe just times out.
+  it('demo contains every attack scenario for real', async () => {
+    const { code, stdout, stderr } = await runCli(PACKAGE_ROOT, ['demo']);
+    const out = `${stdout}\n${stderr}`;
+    expect(out, out).toMatch(/all \d+ attack\(s\) contained/);
+    expect(out).not.toMatch(/NOT CONTAINED/);
+    expect(code, out).toBe(0);
+  }, 240_000);
 });
 
 describe.skipIf(hasDocker)('docker integration (skipped)', () => {

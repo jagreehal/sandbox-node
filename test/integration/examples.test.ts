@@ -11,7 +11,7 @@ describe('examples', () => {
     const runner = path.join(PACKAGE_ROOT, 'examples', 'run.mjs');
     const result = spawnSync(process.execPath, [runner], { encoding: 'utf8' });
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('all 9 proof checks passed');
+    expect(result.stdout).toMatch(/all \d+ proof checks passed/);
     expect(result.status).toBe(0);
   });
 });

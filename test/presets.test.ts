@@ -15,7 +15,7 @@ describe('presets', () => {
 
   it('strict is the most locked-down', () => {
     const s = presetConfig('strict');
-    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true, cache: true });
+    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: true });
     expect(s.run.network).toBe('none');
     expect(s.grants['ssh-agent']).toBe(false);
   });
@@ -52,6 +52,15 @@ describe('presets', () => {
     expect(a.run.devPorts).toBe(true);
     expect(a.grants.claude).toBe('project');
     expect(a.grants['ssh-agent']).toBe(false);
+    expect(a.install.canaries).toBe(true); // unattended installs get the honeytoken tripwire
+  });
+
+  it('plants canaries on the high-risk presets, not the relaxed ones', () => {
+    expect(presetConfig('strict').install.canaries).toBe(true);
+    expect(presetConfig('agent').install.canaries).toBe(true);
+    for (const name of ['balanced', 'vibe', 'trusted'] as const) {
+      expect(presetConfig(name).install.canaries).toBe(false);
+    }
   });
 
   it('rejects an unknown preset', () => {

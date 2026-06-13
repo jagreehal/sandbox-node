@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { confirm, isCancel, spinner } from '@clack/prompts';
 import { createBackend } from './backend.js';
@@ -11,7 +12,7 @@ import { resolveProjectContext } from './context.js';
 import { renderBadge } from './badge.js';
 import { COMPLETION_SHELLS, completionScript, isCompletionShell } from './completion.js';
 import { resolveBuildSpec } from './image.js';
-import { runVerify } from './verify.js';
+import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
 import { routePassthrough, type Route } from './dispatch.js';
@@ -28,10 +29,16 @@ import { type AdvisoryHit } from './advisory.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
 import { runScan } from './scan.js';
 import { runDelta } from './delta.js';
+import { feedCacheDir, loadKnownBad, PROJECT_ADVISORY_NAME, updateFeeds, type KnownBadHit } from './known-bad.js';
+import { scanSecrets, type SecretFinding } from './secrets.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
 import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
 import { runSetup } from './setup.js';
+import { makeCanary } from './canary.js';
+import { networkPolicy } from './network.js';
+import { demoPlan, runDemo, type DemoRunner } from './demo.js';
+import type { ContainerBackend } from './backend.js';
 
 interface Globals {
   config?: string;
@@ -59,6 +66,8 @@ interface Globals {
   failOnAdvisory?: boolean;
   /** Allow installing a maintainer-deprecated version for this run (overrides the default block). */
   failOnDeprecated?: boolean;
+  /** Plant canary honeytokens and watch egress for them (overrides install.canaries). */
+  canaries?: boolean;
 }
 
 const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
@@ -107,6 +116,17 @@ Sandbox commands:
                        <ref> (default origin/main; or --base-lockfile <path>) and run the release-age,
                        malware, and deprecation gates over just the added/bumped versions. Honors
                        --min-release-age / --fail-on-advisory. Fast, low-noise PR check.
+  secrets [path]       offline scan for committed credentials (API keys, tokens, private keys, db
+                       URLs). Read-only, no container; exits non-zero on any finding (CI tripwire).
+                       Matched values are redacted — reports where, never the secret. Defaults to cwd.
+                       ~40 provider patterns, checksum/decode validation (Luhn, JWT) to cut noise,
+                       plus an entropy fallback for secret-ish values with no known shape.
+  demo                 run real supply-chain attacks (credential theft, persistence, IMDS pivot,
+                       egress exfil) against the sandbox in a THROWAWAY project and show each one
+                       contained. No mocks; exits non-zero if any attack isn't contained.
+  feeds <update|list>  manage malware FEEDS (install.malwareFeeds): \`update\` fetches + caches them so
+                       the install-time blocklist check stays offline; \`list\` shows configured/cached
+                       feeds. A package on a feed (or in sandbox.advisories.json) ALWAYS blocks installs.
   upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates) —
                        NOT just within the range (that's \`sandbox npm update\`). Your release-age
                        gate drives ncu's --cooldown automatically, the proposed versions go through
@@ -116,9 +136,18 @@ Sandbox commands:
                        --fix runs the safe remedies (currently: rebuild an absent/stale image).
   build                build (or rebuild) the sandbox + egress-proxy images
   verify [--scan]      exit non-zero unless this repo commits a real sandbox boundary and
-                       no personal layer has loosened it — the CI gate behind the badge.
-                       --scan also runs the retroactive malware sweep (so the badge means
-                       "boundary intact AND no installed dep is currently flagged as malware")
+       [--secrets]     no personal layer has loosened it — the CI gate behind the badge.
+       [--sign]        --scan also runs the retroactive malware sweep (so the badge means
+                       "boundary intact AND no installed dep is currently flagged as malware");
+                       --secrets also fails if a credential is committed in the repo;
+                       --sign emits an Ed25519-signed receipt of the green boundary to stdout
+                       (needs SANDBOX_SIGNING_KEY → a key file from \`sandbox keygen\`)
+  verify-receipt <f>   verify a signed receipt from \`verify --sign\`; --fingerprint <hex> (or
+                       SANDBOX_TRUSTED_KEY) pins the signer so any other key is rejected
+  keygen               generate an Ed25519 signing keypair: private key → CI secret
+                       (SANDBOX_SIGNING_KEY), fingerprint → pin via SANDBOX_TRUSTED_KEY
+  audit verify <log>   verify the hash-chained audit log is intact (no entry altered or removed).
+                       Set SANDBOX_AUDIT_LOG=<path> on any run to append tamper-evident events
   badge [--workflow F] print a markdown "sandboxed" badge. Bare = static provenance badge;
                        --workflow sandbox.yml = the CI-backed verified badge (--repo to override)
   devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
@@ -147,6 +176,10 @@ Globals (before the command):
                        manager except pnpm the ENTIRE source tree is read-only. Needs a
                        committed lockfile.
   --fail-on-egress     exit non-zero if the proxy blocked any egress (CI tripwire)
+  --canaries           plant fake AWS/Stripe/Slack credentials in the install container and watch
+       --no-canaries   the egress proxy for them — if a planted token leaves the box it's caught as
+                       an exfiltration attempt (fails the run). Allowlist egress only; on by default
+                       in the strict/agent presets. --no-canaries turns it off for one run.
   --risk <off|basic|thorough>  registry risk hints: off; basic (packument-only: typosquat,
                        provenance regression, maintainer takeover, …); thorough adds
                        network checks (missing metadata, low downloads, expired domains)
@@ -222,6 +255,8 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     else if (a === '--interactive' || a === '--prompt') globals.interactive = true;
     else if (a === '--fail-on-advisory') globals.failOnAdvisory = true;
     else if (a === '--allow-deprecated') globals.failOnDeprecated = false;
+    else if (a === '--canaries') globals.canaries = true;
+    else if (a === '--no-canaries') globals.canaries = false;
     else break;
   }
   return { globals, cmd: argv[i], args: argv.slice(i + 1) };
@@ -427,6 +462,19 @@ function logAdvisoryHits(hits: AdvisoryHit[]): void {
   }
 }
 
+/** Report blocklist / malware-feed matches. These are an explicit team decision, so they always block. */
+function logKnownBadHits(hits: KnownBadHit[]): void {
+  if (!hits.length) return;
+  const lines = [
+    `blocked by your blocklist — ${hits.length} package(s) are listed as known-bad:`,
+    ...hits.map((h) => `  ${h.name}@${h.version} [${h.severity}] — ${h.reason} (source: ${h.source})`),
+    'options:',
+    '  • remove or pin a different version of the package(s) above',
+    `  • if this is a false positive, edit the matching entry in ${PROJECT_ADVISORY_NAME} (or your malware feed)`,
+  ];
+  log.error(lines.join('\n'));
+}
+
 /** The gate policy resolved for one route — flags override config, config fills the rest. */
 interface ActivePolicy {
   riskHints: boolean;
@@ -482,6 +530,7 @@ function nothingToCheck(ap: ActivePolicy): boolean {
  * then risk hints under `--fail-on-risk`. Returns the exit code to block with, or undefined to proceed.
  */
 function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefined {
+  if (result.knownBadHits.length) return 1;
   if (result.ageViolations.length) return 1;
   if (result.advisoryHits.some((h) => h.malware)) return 1;
   if (ap.failOnDeprecated && deprecatedHints(result).length) return 1;
@@ -529,12 +578,18 @@ function logDeep(ap: ActivePolicy, result: PreflightResult, pm: PackageManager):
 async function preflightRoute(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route): Promise<number | undefined> {
   if (globals.json || globals.dryRun) return undefined;
   const ap = resolvePolicy(globals, config, route);
-  if (nothingToCheck(ap)) return undefined;
+  const knownBad = loadKnownBad(facts.cwd);
+  if (nothingToCheck(ap) && !knownBad.length) return undefined;
 
   const targets = riskTargetsForRoute(route, facts);
-  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd });
+  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd, knownBad });
   logDeep(ap, result, facts.pm);
 
+  // Blocklist / malware-feed match — an explicit team decision, so it blocks ahead of everything.
+  if (result.knownBadHits.length) {
+    logKnownBadHits(result.knownBadHits);
+    return 1;
+  }
   // Release-age gate — the strongest control, so it blocks first.
   if (result.ageViolations.length) {
     const suggestions = await suggestPins(result.ageViolations, ap.minReleaseAgeDays);
@@ -573,6 +628,7 @@ function renderPreflightJson(result: PreflightResult, suggestions: PinSuggestion
       hints: result.hints.filter((h) => h.code !== 'deprecated'), // deprecated reported in its own field
       ageViolations: result.ageViolations.map((v) => ({ name: v.name, version: v.version, publishedAt: v.publishedAt.toISOString(), ageDays: days(v.ageMs) })),
       advisoryHits: result.advisoryHits,
+      knownBadHits: result.knownBadHits,
       deprecations: deprecatedHints(result).map((h) => ({ name: h.package, version: h.version, reason: h.code === 'deprecated' ? h.detail.deprecated : h.message })),
       suggestions: suggestions.map((s) => ({ name: s.name, version: s.version, pin: `sandbox ${pm} add ${s.name}@${s.version}`, ageDays: days(s.ageMs) })),
     },
@@ -591,14 +647,15 @@ function renderPreflightJson(result: PreflightResult, suggestions: PinSuggestion
 async function runPreflightCommand(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route): Promise<number> {
   const ap = resolvePolicy(globals, config, route);
   const targets = riskTargetsForRoute(route, facts);
+  const knownBad = loadKnownBad(facts.cwd);
 
-  if (nothingToCheck(ap)) {
-    if (globals.json) console.log(JSON.stringify({ blocked: false, gatesEnabled: false, checked: 0, hints: [], ageViolations: [], advisoryHits: [], suggestions: [] }, null, 2));
+  if (nothingToCheck(ap) && !knownBad.length) {
+    if (globals.json) console.log(JSON.stringify({ blocked: false, gatesEnabled: false, checked: 0, hints: [], ageViolations: [], advisoryHits: [], knownBadHits: [], suggestions: [] }, null, 2));
     else log.info('no supply-chain gates enabled — pass --min-release-age, --fail-on-advisory, and/or --fail-on-risk (or `sandbox init --preset strict`)');
     return 0;
   }
 
-  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd });
+  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd, knownBad });
   const suggestions = result.ageViolations.length ? await suggestPins(result.ageViolations, ap.minReleaseAgeDays) : [];
   const exit = blockExit(result, ap) ?? 0;
 
@@ -609,6 +666,7 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
 
   // Human report: log every finding (no short-circuit — this is a report, not a gate).
   logDeep(ap, result, facts.pm);
+  if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
   if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions);
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
@@ -626,28 +684,91 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
  * reported as warnings. Network-only (no container); fails open per package on an OSV error.
  */
 async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string): Promise<number> {
-  const result = await runScan({ pm, cwd });
+  const result = await runScan({ pm, cwd, knownBad: loadKnownBad(cwd) });
+  const blocked = result.malware.length > 0 || result.knownBadHits.length > 0;
   if (globals.json) {
     console.log(
       JSON.stringify(
-        { scanned: result.scanned, lockfileMissing: result.lockfileMissing, blocked: result.malware.length > 0, malware: result.malware, advisories: result.hits.filter((h) => !h.malware) },
+        { scanned: result.scanned, lockfileMissing: result.lockfileMissing, blocked, malware: result.malware, knownBadHits: result.knownBadHits, advisories: result.hits.filter((h) => !h.malware) },
         null,
         2,
       ),
     );
-    return result.malware.length ? 1 : 0;
+    return blocked ? 1 : 0;
   }
   if (result.lockfileMissing) {
     log.warn(`scan: no parseable lockfile for ${pm} — nothing to scan (commit a lockfile; bun has no parser yet)`);
     return 0;
   }
   logAdvisoryHits(result.hits);
-  if (result.malware.length) {
-    log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
+  if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
+  if (blocked) {
+    if (result.malware.length) log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
+    if (result.knownBadHits.length) log.error(`scan: ${result.knownBadHits.length} installed package(s) match your blocklist/feeds (scanned ${result.scanned})`);
     return 1;
   }
-  log.info(`scan: clean — no installed package is currently flagged as malware (scanned ${result.scanned}${result.hits.length ? `; ${result.hits.length} non-malware advisory hint(s) above` : ''})`);
+  log.info(`scan: clean — no installed package is currently flagged as malware or blocklisted (scanned ${result.scanned}${result.hits.length ? `; ${result.hits.length} non-malware advisory hint(s) above` : ''})`);
   return 0;
+}
+
+/**
+ * `sandbox secrets [path]` — offline scan for committed credentials. The sandbox keeps host secrets
+ * OUT of the install container, but can't stop a key being committed into the repo; this is the
+ * visibility half of the credential mission. Read-only, no container. Exits non-zero on any finding
+ * (a CI tripwire). Matched values are redacted — it reports where, never the secret itself.
+ */
+function runSecretsCommand(globals: Globals, root: string): number {
+  let findings: SecretFinding[];
+  try {
+    findings = scanSecrets(root);
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
+  }
+  if (globals.json) {
+    console.log(JSON.stringify({ root, found: findings.length, findings }, null, 2));
+    return findings.length ? 1 : 0;
+  }
+  if (!findings.length) {
+    log.info('secrets: clean — no credential patterns found in the scanned files');
+    return 0;
+  }
+  for (const f of findings) log.error(`${f.file}:${f.line} — ${f.label} (${f.ruleId}): ${f.redacted}`);
+  log.error(`secrets: ${findings.length} potential credential(s) found — rotate any real key, move it to an env var, and add the file to .gitignore`);
+  return 1;
+}
+
+/**
+ * `sandbox feeds update` — fetch the malware FEEDS in install.malwareFeeds and cache them locally so
+ * the install-time blocklist check stays offline. Augments OSV (which has publish lag) with feeds the
+ * team trusts. `sandbox feeds list` shows the configured feeds and what's cached.
+ */
+async function runFeedsCommand(globals: Globals, config: SandboxConfig, args: string[]): Promise<number> {
+  const sub = args[0] ?? 'update';
+  const feeds = config.install.malwareFeeds;
+  if (sub === 'list') {
+    if (globals.json) console.log(JSON.stringify({ feeds, cacheDir: feedCacheDir() }, null, 2));
+    else {
+      log.info(feeds.length ? `configured malware feeds (install.malwareFeeds):\n${feeds.map((f) => `  • ${f}`).join('\n')}` : 'no malware feeds configured — add URLs to install.malwareFeeds in sandbox.config.json');
+      log.info(`feed cache: ${feedCacheDir()}`);
+    }
+    return 0;
+  }
+  if (sub !== 'update') fail('usage: sandbox feeds <update|list>');
+  if (!feeds.length) {
+    log.info('feeds: nothing to update — add malware feed URLs to install.malwareFeeds in sandbox.config.json first');
+    return 0;
+  }
+  log.info(`feeds: fetching ${feeds.length} feed(s) …`);
+  const results = await updateFeeds(feeds);
+  if (globals.json) {
+    console.log(JSON.stringify({ results, cacheDir: feedCacheDir() }, null, 2));
+  } else {
+    for (const r of results) {
+      if (r.error) log.error(`  ✗ ${r.feed} — ${r.error}`);
+      else log.info(`  ✓ ${r.feed} — ${r.count} package(s) cached`);
+    }
+  }
+  return results.some((r) => r.error) ? 1 : 0;
 }
 
 /** Read the base (merge-target) lockfile for `delta`: an explicit file, else `git show <ref>:<lockfile>`. */
@@ -686,11 +807,11 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
   const baseMissing = base === undefined;
   const result = await runDelta(
     { minReleaseAgeDays, releaseAgeExclude: [...config.install.minReleaseAgeExclude, ...globals.allowRecent], advisories },
-    { pm: facts.pm, cwd: facts.cwd, base: base ?? [], baseMissing },
+    { pm: facts.pm, cwd: facts.cwd, base: base ?? [], baseMissing, knownBad: loadKnownBad(facts.cwd) },
   );
 
   const suggestions = result.ageViolations.length ? await suggestPins(result.ageViolations, minReleaseAgeDays) : [];
-  const blocked = result.ageViolations.length > 0 || result.advisoryHits.some((h) => h.malware) || (failOnDeprecated && result.deprecated.length > 0);
+  const blocked = result.knownBadHits.length > 0 || result.ageViolations.length > 0 || result.advisoryHits.some((h) => h.malware) || (failOnDeprecated && result.deprecated.length > 0);
 
   if (globals.json) {
     const days = (ms: number): number => Math.floor(ms / (24 * 60 * 60 * 1000));
@@ -703,6 +824,7 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
           blocked,
           ageViolations: result.ageViolations.map((v) => ({ name: v.name, version: v.version, publishedAt: v.publishedAt.toISOString(), ageDays: days(v.ageMs) })),
           advisoryHits: result.advisoryHits,
+          knownBadHits: result.knownBadHits,
           deprecations: result.deprecated.map((h) => ({ name: h.package, version: h.version, message: h.message })),
           suggestions: suggestions.map((s) => ({ name: s.name, version: s.version, pin: `sandbox ${facts.pm} add ${s.name}@${s.version}`, ageDays: days(s.ageMs) })),
         },
@@ -719,6 +841,7 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
     return 0;
   }
   log.info(`delta: ${result.changed.length} added/changed package(s) vs ${baseFile ?? baseRef}`);
+  if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
   if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, minReleaseAgeDays, facts.pm, suggestions);
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(result.deprecated, failOnDeprecated);
@@ -815,7 +938,7 @@ async function runUpgradeCommand(
   // guarantees. Cooldown already filtered fresh publishes inside ncu; re-running the age gate here is
   // belt-and-suspenders and catches any reject/exclude drift. Direct targets only (no --deep tree).
   const gatePolicy: PreflightPolicy = { ...ap.policy, deep: false };
-  const result = await runPreflight(upgradeTargets(upgrades), gatePolicy, { pm: facts.pm, cwd: facts.cwd });
+  const result = await runPreflight(upgradeTargets(upgrades), gatePolicy, { pm: facts.pm, cwd: facts.cwd, knownBad: loadKnownBad(facts.cwd) });
   const deps = deprecatedHints(result);
   const rows = classifyUpgrades(upgrades, {
     ageNames: new Set(result.ageViolations.map((v) => v.name)),
@@ -833,6 +956,7 @@ async function runUpgradeCommand(
   log.info(`upgrade: ${rows.length} package(s) can move:\n${renderUpgradeTable(rows)}`);
 
   if (blocked) {
+    if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
     if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, cooldownDays, facts.pm, suggestions);
     if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
     logDeprecatedGate(deps, ap.failOnDeprecated);
@@ -864,6 +988,34 @@ async function runUpgradeCommand(
   }
   log.info(`upgrade: package.json updated (${rows.length} dep(s)) — installing in the sandbox to refresh the lockfile …`);
   return materialize();
+}
+
+/**
+ * `sandbox demo` — run the attack scenarios against the real sandbox. Everything happens in a
+ * THROWAWAY project (never the user's repo): a temp dir with a read-only `.git` so the persistence
+ * attack has something to bounce off, and no `.env`/credentials so the theft attack finds nothing.
+ * Each scenario runs through the same {@link execute} path a real install uses, so the result is a
+ * genuine demonstration, not a script. Image/build settings come from the user's config (so it reuses
+ * their sandbox image); the per-scenario network mode + canaries come from the scenario itself.
+ */
+async function runDemoCommand(backend: ContainerBackend, rootDir: string, configPath: string | undefined): Promise<number> {
+  const baseConfig = readConfig(rootDir, configPath);
+  const dir = mkdtempSync(path.join(tmpdir(), 'sbx-demo-'));
+  mkdirSync(path.join(dir, '.git', 'hooks'), { recursive: true });
+  writeFileSync(path.join(dir, 'package.json'), '{"name":"sandbox-demo","private":true}\n');
+  log.info('demo: running real supply-chain attacks against the sandbox (first run builds the image; nothing touches your repo)');
+  try {
+    const facts = probeProject(dir, baseConfig, { envFiles: [], envFileBaseDir: dir, configEnvFilesBaseDir: dir });
+    const runner: DemoRunner = async (scenario) => {
+      const plan = demoPlan(scenario, baseConfig, facts);
+      const canary = scenario.needs.canaries ? makeCanary() : undefined;
+      const result = await execute(plan, backend, { failOnEgress: false, ...(canary ? { canary } : {}) });
+      return { code: result.code, deniedHosts: result.deniedHosts, canaryHits: result.canaryHits };
+    };
+    return await runDemo(runner);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function main(): Promise<number> {
@@ -915,16 +1067,69 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'verify') {
-    const code = await runVerify(context.rootDir, context.configPath);
-    if (!args.includes('--scan')) return code;
+    const wantSign = args.includes('--sign');
+    // When signing, keep stdout clean for the receipt — route any --scan/--secrets findings to
+    // stderr (human lines) rather than letting their --json output collide with the receipt.
+    const gateGlobals = wantSign ? { ...globals, json: false } : globals;
+    const checks = ['boundary'];
+    let code = await runVerify(context.rootDir, context.configPath);
     // --scan: also run the retroactive malware sweep, so a green verify means
     // "boundary intact AND no installed dep is currently flagged as malware".
-    const scanCode = await runScanCommand(globals, resolvePackageManager(context.rootDir), context.rootDir);
-    return code || scanCode;
+    if (args.includes('--scan')) {
+      code = code || (await runScanCommand(gateGlobals, resolvePackageManager(context.rootDir), context.rootDir));
+      checks.push('scan');
+    }
+    // --secrets: also fail if a credential is committed in the repo.
+    if (args.includes('--secrets')) {
+      code = code || runSecretsCommand(gateGlobals, context.rootDir);
+      checks.push('secrets');
+    }
+    if (!wantSign) return code;
+    // --sign: emit an Ed25519-signed receipt — but ONLY when every requested gate passed, so the
+    // receipt can never attest a "green" boundary while --scan found malware or --secrets found a key.
+    if (code !== 0) {
+      log.error('verify --sign: not signing — a check above failed; fix it before requesting a receipt');
+      return code;
+    }
+    const keyFile = process.env.SANDBOX_SIGNING_KEY;
+    if (!keyFile) fail('verify --sign needs a signing key: generate one with `sandbox keygen`, then set SANDBOX_SIGNING_KEY to the private-key file');
+    const receipt = signVerifyReceipt(context.rootDir, readSigningKey(keyFile), { configPath: context.configPath, now: new Date(), checks });
+    if (!receipt) return runVerify(context.rootDir, context.configPath); // boundary regressed since the check above (shouldn't happen)
+    console.log(JSON.stringify(receipt, null, 2));
+    return 0;
+  }
+
+  if (cmd === 'verify-receipt') {
+    const file = args.find((a) => !a.startsWith('-'));
+    if (!file) fail('usage: sandbox verify-receipt <file.json> [--fingerprint <hex>]');
+    const fpIdx = args.indexOf('--fingerprint');
+    const trustedFingerprint = (fpIdx >= 0 ? args[fpIdx + 1] : undefined) ?? process.env.SANDBOX_TRUSTED_KEY;
+    return runVerifyReceipt(path.resolve(invocationCwd, file), { trustedFingerprint, json: globals.json });
+  }
+
+  if (cmd === 'keygen') {
+    return runKeygen({ json: globals.json });
+  }
+
+  if (cmd === 'audit') {
+    const sub = args[0];
+    if (sub !== 'verify') fail('usage: sandbox audit verify <log.jsonl>  (the hash-chained audit log; set SANDBOX_AUDIT_LOG to write one)');
+    const file = args.slice(1).find((a) => !a.startsWith('-')) ?? process.env.SANDBOX_AUDIT_LOG;
+    if (!file) fail('usage: sandbox audit verify <log.jsonl>  (or set SANDBOX_AUDIT_LOG)');
+    return runAuditVerify(path.resolve(invocationCwd, file), { json: globals.json });
   }
 
   if (cmd === 'scan') {
     return runScanCommand(globals, resolvePackageManager(context.rootDir), context.rootDir);
+  }
+
+  if (cmd === 'secrets') {
+    const target = args.find((a) => !a.startsWith('-'));
+    return runSecretsCommand(globals, target ? path.resolve(invocationCwd, target) : context.rootDir);
+  }
+
+  if (cmd === 'feeds') {
+    return runFeedsCommand(globals, readConfig(context.rootDir, context.configPath), args);
   }
 
   if (cmd === 'badge') {
@@ -939,6 +1144,10 @@ async function main(): Promise<number> {
   }
 
   const backend = createBackend(globals.backend, { buildReporter: ttyBuildReporter() });
+
+  if (cmd === 'demo') {
+    return runDemoCommand(backend, context.rootDir, context.configPath);
+  }
 
   if (cmd === 'build') {
     const loaded = loadConfig(context.rootDir, context.configPath);
@@ -1048,8 +1257,13 @@ async function main(): Promise<number> {
     if (globals.interactive && !canPrompt) log.info('--interactive requested, but no TTY is attached — continuing non-interactively');
     // The project's own registry hosts (from .npmrc) so the prompt can label them as expected.
     const registryHosts = projectRegistryHints(context.rootDir).hosts;
+    // Canaries only do anything where there's an egress proxy log to watch (allowlist mode); plant
+    // them once and reuse across retries so the same honeytokens persist if we widen + re-run.
+    const wantCanaries = globals.canaries ?? config.install.canaries;
+    const canary = wantCanaries && networkPolicy(plan.network).useEgressProxy ? makeCanary() : undefined;
+    if (wantCanaries && !canary) log.info(`canaries requested but inactive here — they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
     for (;;) {
-      const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress });
+      const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
       if (!result.deniedHosts.length || !canPrompt) return result.code;
       const deniedHosts = [...new Set(result.deniedHosts)].sort();
       const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });

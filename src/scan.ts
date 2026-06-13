@@ -1,4 +1,5 @@
 import { advisoriesForPackages, createAdvisoryClient, type AdvisoryClient, type AdvisoryHit } from './advisory.js';
+import { matchKnownBad, type KnownBadEntry, type KnownBadHit } from './known-bad.js';
 import { readAllPackagesFromLockfile, type LockfilePackage } from './risk.js';
 import type { PackageManager } from './package-manager.js';
 
@@ -19,6 +20,8 @@ export interface ScanResult {
   hits: AdvisoryHit[];
   /** The subset flagged as malware (`MAL-…`) — the high-signal block trigger. */
   malware: AdvisoryHit[];
+  /** Installed packages matched by the local blocklist / malware feeds — also block. */
+  knownBadHits: KnownBadHit[];
   /** No parseable lockfile (none committed, or bun, which has no parser yet). */
   lockfileMissing: boolean;
 }
@@ -27,6 +30,8 @@ export interface ScanContext {
   pm: PackageManager;
   cwd: string;
   advisoryClient?: AdvisoryClient;
+  /** Local blocklist + cached malware-feed entries to match the lockfile against. */
+  knownBad?: KnownBadEntry[];
   /** Override lockfile reading (tests); defaults to reading `cwd`'s lockfile. */
   readLockfile?: (cwd: string, pm: PackageManager) => LockfilePackage[];
 }
@@ -39,9 +44,10 @@ export async function runScan(ctx: ScanContext): Promise<ScanResult> {
     packages = [];
   }
   if (packages.length === 0) {
-    return { scanned: 0, hits: [], malware: [], lockfileMissing: true };
+    return { scanned: 0, hits: [], malware: [], knownBadHits: [], lockfileMissing: true };
   }
   const scanned = new Set(packages.map((p) => `${p.name}@${p.version}`)).size;
   const hits = await advisoriesForPackages(packages, ctx.advisoryClient ?? createAdvisoryClient());
-  return { scanned, hits, malware: hits.filter((h) => h.malware), lockfileMissing: false };
+  const knownBadHits = matchKnownBad(packages, ctx.knownBad ?? []);
+  return { scanned, hits, malware: hits.filter((h) => h.malware), knownBadHits, lockfileMissing: false };
 }
