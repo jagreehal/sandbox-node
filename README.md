@@ -53,6 +53,11 @@ your `package.json` pins a different version with `"packageManager"` (e.g. `pnpm
 version is baked into the image at build time instead — so corepack never has to reach the registry
 through the egress proxy mid-install. The first run after pinning (or changing) it rebuilds the image.
 
+pnpm note: because the bind-mounted workspace is a different device than pnpm's store, pnpm keeps its
+content store in the project (`.pnpm-store/`). The resulting `node_modules` is tied to that in-project
+store, so run later commands through `sandbox` to reuse it as-is running pnpm directly on the host
+rebuilds `node_modules` against the host's own store.
+
 Anything that pulls *new* versions is gated the same way as install — the release-age cooldown, OSV
 malware check, and risk hints resolve against the versions the command would pull, so a
 freshly-published malicious bump is caught before it's fetched:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyCommand, summarizeUnexpectedChanges, type TreeSnapshot } from '../src/tamper.js';
+import { classifyCommand, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore, type TreeSnapshot } from '../src/tamper.js';
 
 function snap(files: Record<string, string>): TreeSnapshot {
   return { files: new Map(Object.entries(files)) };
@@ -36,5 +36,35 @@ describe('summarizeUnexpectedChanges', () => {
     const after = snap({ 'package.json': 'b' });
     expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual(['package.json']);
     expect(summarizeUnexpectedChanges(before, after, 'add')).toEqual([]);
+  });
+
+  it("treats pnpm's project-local store as an expected install artifact", () => {
+    const before = snap({ 'package.json': 'a' });
+    const after = snap({
+      'package.json': 'a',
+      '.pnpm-store/v11/files/00/abc': 'x',
+      '.pnpm-store/v11/files/01/def': 'y',
+    });
+    expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual([]);
+  });
+});
+
+describe('wroteProjectLocalPnpmStore', () => {
+  it('detects a newly created project-local store', () => {
+    const before = snap({ 'package.json': 'a' });
+    const after = snap({ 'package.json': 'a', '.pnpm-store/v11/files/00/abc': 'x' });
+    expect(wroteProjectLocalPnpmStore(before, after)).toBe(true);
+  });
+
+  it('is false when no .pnpm-store was written', () => {
+    const before = snap({ 'package.json': 'a' });
+    const after = snap({ 'package.json': 'a', 'pnpm-lock.yaml': 'l' });
+    expect(wroteProjectLocalPnpmStore(before, after)).toBe(false);
+  });
+
+  it('is false when the store already existed before', () => {
+    const before = snap({ '.pnpm-store/v11/files/00/abc': 'x' });
+    const after = snap({ '.pnpm-store/v11/files/00/abc': 'x' });
+    expect(wroteProjectLocalPnpmStore(before, after)).toBe(false);
   });
 });
