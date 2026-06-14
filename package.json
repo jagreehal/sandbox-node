@@ -1,6 +1,6 @@
 {
   "name": "@jagreehal/sandbox-node",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Run npm/pnpm/yarn/bun installs and dev commands in a Docker/Podman sandbox: lifecycle scripts never touch the host, default-deny credentials + egress.",
   "author": "Jag Reehal",
   "license": "Apache-2.0",
