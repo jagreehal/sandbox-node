@@ -33,7 +33,8 @@
     "net-guard.sh",
     "proxy",
     "sandbox.schema.json",
-    "README.md"
+    "README.md",
+    "skills"
   ],
   "engines": {
     "node": ">=20"

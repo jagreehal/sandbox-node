@@ -20,6 +20,9 @@ RUN chmod +x /usr/local/bin/sbx-net-guard
 RUN corepack enable
 # Pre-activate pnpm + yarn so installs don't download a package manager at run time
 # (faster, and works under the no-network/allowlist phases). Silence the prompt.
+# A project that pins a *different* pnpm/yarn via package.json "packageManager" gets
+# that exact version baked as an extra build layer (see corepackPrepareStep in image.ts),
+# so corepack never has to fetch one through the egress proxy at run time.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack prepare pnpm@9.15.0 yarn@1.22.22 --activate
 

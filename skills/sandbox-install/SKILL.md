@@ -22,6 +22,10 @@ review-before-install — and you only run the real install once the user has cl
    `npm/pnpm/yarn/bun install` (+ `npx`/`bunx`) through sandbox automatically, so neither of you has
    to remember the prefix. `sandbox setup` also offers to wire this. See [REFERENCE.md](REFERENCE.md).
 
+   If `package.json` pins a `"packageManager"` (pnpm/yarn) other than the image's baked default,
+   the first install bakes that version into the image, so expect a one-time image build before the
+   install runs. It's automatic — no config needed.
+
 2. **Review pass — check WITHOUT installing.** Use the `preflight` command: it runs the
    gates over what the command would pull and **never installs**, so this is always safe to
    run first.
