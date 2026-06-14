@@ -47,6 +47,23 @@ describe('summarizeUnexpectedChanges', () => {
     });
     expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual([]);
   });
+
+  it('ignores nested workspace node_modules (monorepo install output)', () => {
+    const before = snap({ 'package.json': 'a' });
+    const after = snap({
+      'package.json': 'a',
+      'app/node_modules/.bin/tsx': 'x',
+      'app/node_modules/hono/index.js': 'y',
+      'packages/ui/node_modules/react/index.js': 'z',
+    });
+    expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual([]);
+  });
+
+  it('still flags tampering that merely mentions node_modules in the path', () => {
+    const before = snap({ 'package.json': 'a' });
+    const after = snap({ 'package.json': 'a', 'src/node_modules_loader.ts': 'x' });
+    expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual(['src/node_modules_loader.ts']);
+  });
 });
 
 describe('wroteProjectLocalPnpmStore', () => {
