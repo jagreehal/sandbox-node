@@ -61,6 +61,19 @@ function isExpectedProjectWrite(rel: string, kind: CommandKind): boolean {
   if (file === '.pnp.cjs' || file === '.pnp.loader.mjs') return true;
   if (file === '.yarn/install-state.gz' || file === '.yarn/build-state.yml') return true;
   if (file.startsWith('.yarn/cache/') || file.startsWith('.yarn/unplugged/')) return true;
+  // pnpm's project-local content store. pnpm relocates its store next to node_modules
+  // when the configured store is on a different device than the project (always the case
+  // for a bind-mounted workspace), so an install legitimately writes thousands of files
+  // here — it's a normal install artifact, not tampering.
+  if (file === '.pnpm-store' || file.startsWith('.pnpm-store/')) return true;
+  return false;
+}
+
+/** True when this install created pnpm's project-local content store (`.pnpm-store/`). */
+export function wroteProjectLocalPnpmStore(before: TreeSnapshot, after: TreeSnapshot): boolean {
+  for (const file of after.files.keys()) {
+    if ((file === '.pnpm-store' || file.startsWith('.pnpm-store/')) && !before.files.has(file)) return true;
+  }
   return false;
 }
 

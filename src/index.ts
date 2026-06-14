@@ -5,7 +5,7 @@ import { log } from './log.js';
 import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
 import { missingAllowHosts, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
-import { classifyCommand, snapshotTree, summarizeUnexpectedChanges } from './tamper.js';
+import { classifyCommand, snapshotTree, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore } from './tamper.js';
 import { appendAudit } from './receipt.js';
 import { scanCanaryLog, type Canary } from './canary.js';
 
@@ -230,12 +230,19 @@ export async function execute(
     return auditRun(plan, { code: await backend.runPlan(plan, { network }), deniedHosts: [], canaryHits: [] });
   } finally {
     if (workspaceRoot && before && kind !== 'other') {
-      const changes = summarizeUnexpectedChanges(before, snapshotTree(workspaceRoot), kind);
+      const after = snapshotTree(workspaceRoot);
+      const changes = summarizeUnexpectedChanges(before, after, kind);
       if (changes.length) {
         log.warn(`install changed ${changes.length} project file(s) outside dependency output paths`, {
           files: changes.slice(0, 8),
           truncated: changes.length > 8,
         });
+      }
+      if (wroteProjectLocalPnpmStore(before, after)) {
+        // pnpm put its content store next to node_modules (the bind mount is a different
+        // device than its configured store). That node_modules is tied to this in-project
+        // store, so a later pnpm run on the host rebuilds it against the host's own store.
+        log.info('pnpm created a project-local store (.pnpm-store/). Run later commands through `sandbox` to reuse it as-is; running pnpm directly on the host rebuilds node_modules against the host store.');
       }
     }
     cleanupBlockerMountpoints(plan);
