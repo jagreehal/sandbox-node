@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { SandboxConfig } from './config.js';
+import { parsePackageManagerField } from './package-manager.js';
 
 /**
  * The base image the bundled Dockerfile builds `FROM` when nothing overrides it.
@@ -49,16 +50,48 @@ export function resolveBaseImage(build: SandboxConfig['build']): string {
 }
 
 /**
+ * pnpm/yarn versions baked into the bundled image (see the `corepack prepare` line in
+ * the Dockerfile). A project pinning one of these needs no extra build step.
+ */
+export const BAKED_COREPACK: Record<string, string> = { pnpm: '9.15.0', yarn: '1.22.22' };
+
+/**
+ * The `corepack prepare` step for a project's pinned `packageManager`, so the exact
+ * pnpm/yarn version is baked at build time (where the network is available) instead of
+ * corepack trying — and failing — to download it at run time behind the egress proxy or
+ * in a no-network phase. Passes the raw field (integrity hash included) so corepack
+ * verifies it. Returns null for no pin, npm/bun, or a version already baked into the image.
+ */
+export function corepackPrepareStep(packageManagerField: unknown): string | null {
+  const parsed = parsePackageManagerField(packageManagerField);
+  if (!parsed || (parsed.name !== 'pnpm' && parsed.name !== 'yarn')) return null;
+  if (BAKED_COREPACK[parsed.name] === parsed.version) return null;
+  return `RUN ${JSON.stringify(['corepack', 'prepare', parsed.raw, '--activate'])}`;
+}
+
+/** The `packageManager` field from `<dir>/package.json`, or undefined if unreadable. */
+function readPackageManagerField(dir: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).packageManager;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Turn `config.build` + the resolved image tag into a {@link BuildSpec}. `contextDir` is the
- * project root — the build context for `COPY`/`ADD` in `extraSteps`. Pure.
+ * project root — the build context for `COPY`/`ADD` in `extraSteps`, and the source of the
+ * project's pinned package manager (baked via a leading `corepack prepare` step).
  */
 export function resolveBuildSpec(config: SandboxConfig, tag: string, contextDir: string): BuildSpec {
   const b = config.build;
+  const pmStep = corepackPrepareStep(readPackageManagerField(contextDir));
   return {
     tag,
     baseImage: resolveBaseImage(b),
     extraPackages: b.extraPackages,
-    extraSteps: b.extraSteps,
+    // Bake the project's pinned pnpm/yarn first, then the user's own extra steps.
+    extraSteps: pmStep ? [pmStep, ...b.extraSteps] : b.extraSteps,
     buildContext: contextDir,
     customDockerfile: b.customDockerfileUnsafe ? path.resolve(b.customDockerfileUnsafe) : undefined,
   };

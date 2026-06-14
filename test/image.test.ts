@@ -4,7 +4,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SandboxConfigSchema } from '../src/config.js';
 import {
+  BAKED_COREPACK,
   DEFAULT_BASE_IMAGE,
+  corepackPrepareStep,
   customDockerfileWarnings,
   derivedDockerfile,
   extraStepsNeedRepoContext,
@@ -125,5 +127,48 @@ describe('customDockerfileWarnings', () => {
   it('stays quiet when the markers are present', () => {
     const content = 'FROM node:24\nRUN apt-get install -y libcap2-bin\nCOPY net-guard.sh /usr/local/bin/sbx-net-guard\nRUN corepack enable\n';
     expect(customDockerfileWarnings(content)).toEqual([]);
+  });
+});
+
+describe('corepackPrepareStep', () => {
+  it('bakes a pinned pnpm/yarn version that differs from the baked default', () => {
+    expect(corepackPrepareStep('pnpm@11.5.3')).toBe('RUN ["corepack","prepare","pnpm@11.5.3","--activate"]');
+    expect(corepackPrepareStep('yarn@4.5.0')).toBe('RUN ["corepack","prepare","yarn@4.5.0","--activate"]');
+  });
+  it('passes the integrity hash through to corepack', () => {
+    expect(corepackPrepareStep('pnpm@11.5.3+sha512.abc')).toBe('RUN ["corepack","prepare","pnpm@11.5.3+sha512.abc","--activate"]');
+  });
+  it('skips when the pin already matches the baked version', () => {
+    expect(corepackPrepareStep(`pnpm@${BAKED_COREPACK.pnpm}`)).toBeNull();
+    expect(corepackPrepareStep(`yarn@${BAKED_COREPACK.yarn}`)).toBeNull();
+  });
+  it('skips npm, bun, and absent pins', () => {
+    expect(corepackPrepareStep('npm@10.0.0')).toBeNull();
+    expect(corepackPrepareStep('bun@1.2.0')).toBeNull();
+    expect(corepackPrepareStep(undefined)).toBeNull();
+  });
+});
+
+describe('resolveBuildSpec — package manager baking', () => {
+  function projectWith(pkg: Record<string, unknown>): string {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-pm-'));
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+    return dir;
+  }
+
+  it('prepends a corepack step for a pinned pnpm version, before user extra steps', () => {
+    const dir = projectWith({ packageManager: 'pnpm@11.5.3' });
+    const spec = resolveBuildSpec(configWith({ extraSteps: ['RUN echo hi'] }), 'tag', dir);
+    expect(spec.extraSteps).toEqual(['RUN ["corepack","prepare","pnpm@11.5.3","--activate"]', 'RUN echo hi']);
+    expect(hasExtraLayer(spec)).toBe(true);
+  });
+
+  it('adds no step for a project with no packageManager pin', () => {
+    const dir = projectWith({ name: 'x' });
+    expect(resolveBuildSpec(configWith(), 'tag', dir).extraSteps).toEqual([]);
+  });
+
+  it('adds no step when the project package.json is unreadable', () => {
+    expect(resolveBuildSpec(configWith(), 'tag', CTX).extraSteps).toEqual([]);
   });
 });

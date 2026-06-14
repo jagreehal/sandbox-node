@@ -21,6 +21,30 @@ function lockfileCandidates(pm: PackageManager): readonly string[] {
   return pm === 'bun' ? BUN_LOCKFILES : [LOCKFILES[pm]];
 }
 
+export interface ParsedPackageManager {
+  name: PackageManager;
+  /** Version with any `+sha…` integrity suffix stripped (for comparisons). */
+  version: string;
+  /** The raw `packageManager` field, integrity hash included — pass this to `corepack prepare`. */
+  raw: string;
+}
+
+const PACKAGE_MANAGER_RE = /^(npm|pnpm|yarn|bun)@([0-9A-Za-z][0-9A-Za-z._+-]*)$/;
+
+/**
+ * Parse a package.json `packageManager` field (e.g. `pnpm@9.15.0`,
+ * `pnpm@9.15.0+sha512.…`). Returns null when absent or not a known manager.
+ */
+export function parsePackageManagerField(field: unknown): ParsedPackageManager | null {
+  if (typeof field !== 'string') return null;
+  const match = PACKAGE_MANAGER_RE.exec(field);
+  if (!match) return null;
+  const [, name, rawVersion] = match;
+  const version = rawVersion.split('+')[0];
+  if (!version) return null;
+  return { name: name as PackageManager, version, raw: field };
+}
+
 /** Detect the package manager from the lockfile present in `cwd` (npm fallback). */
 export function resolvePackageManager(cwd: string): PackageManager {
   if (existsSync(path.join(cwd, 'pnpm-lock.yaml'))) return 'pnpm';

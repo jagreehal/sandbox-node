@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv } from '../src/package-manager.js';
+import { parsePackageManagerField, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv } from '../src/package-manager.js';
+
+describe('parsePackageManagerField', () => {
+  it('parses name and version', () => {
+    expect(parsePackageManagerField('pnpm@9.15.0')).toEqual({ name: 'pnpm', version: '9.15.0', raw: 'pnpm@9.15.0' });
+  });
+  it('strips the integrity hash from version but keeps it in raw', () => {
+    expect(parsePackageManagerField('pnpm@11.5.3+sha512.abc')).toEqual({
+      name: 'pnpm',
+      version: '11.5.3',
+      raw: 'pnpm@11.5.3+sha512.abc',
+    });
+  });
+  it('returns null for absent, non-string, or unknown managers', () => {
+    expect(parsePackageManagerField(undefined)).toBeNull();
+    expect(parsePackageManagerField(123)).toBeNull();
+    expect(parsePackageManagerField('pnpm')).toBeNull();
+    expect(parsePackageManagerField('deno@1.0.0')).toBeNull();
+  });
+  it('rejects whitespace and shell metacharacters', () => {
+    expect(parsePackageManagerField('pnpm@9.15.0 && curl attacker')).toBeNull();
+    expect(parsePackageManagerField('pnpm@9.15.0\nRUN echo hi')).toBeNull();
+    expect(parsePackageManagerField('pnpm@9.15.0;echo hi')).toBeNull();
+  });
+});
 
 describe('pmUpdateArgv', () => {
   it('preserves the verb the user typed, routing pnpm/yarn through corepack', () => {

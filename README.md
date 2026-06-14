@@ -27,6 +27,12 @@ Put `sandbox` in front of the npm/pnpm/yarn/bun command you already run. Install
 (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token,
 cloud credentials, or editor/agent state unless you explicitly grant it.
 
+If you want the reasoning before the command reference, read the three short posts first:
+
+- [npm install runs code you never read](https://arrangeactassert.com/posts/npm-install-runs-code-you-never-read/)
+- [How sandbox runs risky installs in a throwaway container](https://arrangeactassert.com/posts/how-sandbox-runs-risky-installs-in-a-throwaway-container/)
+- [How to put sandbox in front of npm, pnpm, yarn, and bun](https://arrangeactassert.com/posts/how-to-put-sandbox-in-front-of-npm-pnpm-yarn-and-bun/)
+
 > **First time?** Get the `sandbox` command with `npx @jagreehal/sandbox-node@latest` (no install) or
 > `npm i -D @jagreehal/sandbox-node`, and make sure Docker is running. See [Install](#install) for details.
 
@@ -41,6 +47,11 @@ sandbox npx vite             # one-off tools too
 Works with **npm, pnpm, yarn, and bun** (`install` / `ci` / `add` / `update` / `audit fix` and any
 run/exec script), plus runners like `npx`, `bunx`, `node`, `tsx`, and `vite`. Install scripts still
 work; your secrets just aren't there to steal.
+
+The image pre-activates pnpm and yarn so installs never download a package manager at run time. If
+your `package.json` pins a different version with `"packageManager"` (e.g. `pnpm@11.5.3`), that exact
+version is baked into the image at build time instead — so corepack never has to reach the registry
+through the egress proxy mid-install. The first run after pinning (or changing) it rebuilds the image.
 
 Anything that pulls *new* versions is gated the same way as install — the release-age cooldown, OSV
 malware check, and risk hints resolve against the versions the command would pull, so a
@@ -272,6 +283,25 @@ least as strict as a hand-rolled one. The Claude Code feature stays pinned to `:
 versioning for features). If the registry is unreachable when you run `init`, the Dockerfile falls
 back to the tag alone (still annotated); re-run `sandbox devcontainer init --force` while online to
 pin the digest.
+
+### Agent skill: human-in-the-loop install review
+
+`sandbox install` is the containment; **`sandbox-install`** is a Claude Code skill that puts a review
+step in front of it. Instead of letting an agent install blind, the skill has it run `sandbox preflight`
+first — the same release-age, malware, deprecation, and risk-hint gates as a real install, but it
+installs **nothing** — then surface each finding with a recommended action and run the real install only
+once you've cleared the risk, with the flags that match your choices. It never auto-proceeds past a
+`MAL-…` malware advisory.
+
+Install it with the [`skills` CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add jagreehal/sandbox-node
+```
+
+That drops `skills/sandbox-install` into your agent's skills directory (`.claude/skills`, etc.), and the
+agent picks it up when you ask it to install or vet a package. To wire it by hand, copy that directory in
+yourself. See [skills/sandbox-install/SKILL.md](skills/sandbox-install/SKILL.md) for the full workflow.
 
 ---
 
