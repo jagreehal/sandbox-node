@@ -14,7 +14,15 @@ function normalize(rel: string): string {
 
 function shouldSkip(rel: string): boolean {
   const file = normalize(rel);
-  return file === 'node_modules' || file.startsWith('node_modules/');
+  // Skip any node_modules at any depth, not just the root. Workspace/monorepo installs
+  // write into per-package node_modules (app/node_modules, packages/*/node_modules, …),
+  // which is dependency output, not project tampering.
+  return (
+    file === 'node_modules' ||
+    file.startsWith('node_modules/') ||
+    file.endsWith('/node_modules') ||
+    file.includes('/node_modules/')
+  );
 }
 
 function signature(file: string): string {
