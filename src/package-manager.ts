@@ -39,7 +39,9 @@ export function parsePackageManagerField(field: unknown): ParsedPackageManager |
   if (typeof field !== 'string') return null;
   const match = PACKAGE_MANAGER_RE.exec(field);
   if (!match) return null;
-  const [, name, rawVersion] = match;
+  const name = match[1];
+  const rawVersion = match[2];
+  if (!name || !rawVersion) return null;
   const version = rawVersion.split('+')[0];
   if (!version) return null;
   return { name: name as PackageManager, version, raw: field };
