@@ -5,6 +5,7 @@ import { LOCAL_CONFIG_NAME, writeConfig, type SandboxConfig } from './config.js'
 import { installAgentHook, MANUAL_AGENT_SNIPPET, type HookInstall } from './hook.js';
 import { PRESETS, PRESET_NAMES, presetConfig, type PresetName } from './presets.js';
 import { detectEgressHosts, missingAllowHosts } from './registry.js';
+import { HOST_GROUPS, hostGroup } from './host-groups.js';
 
 /**
  * Merge hosts an install will likely need (private registry from `.npmrc`, github for git deps)
@@ -13,6 +14,17 @@ import { detectEgressHosts, missingAllowHosts } from './registry.js';
  */
 export function mergeDetectedEgress(cwd: string, config: SandboxConfig): string[] {
   const added = missingAllowHosts(config.egress.allow, detectEgressHosts(cwd));
+  if (added.length) config.egress.allow = [...config.egress.allow, ...added].sort();
+  return added;
+}
+
+/**
+ * Add the hosts from the named opt-in {@link HOST_GROUPS} to `egress.allow`. Mutates `config`,
+ * returns the hosts actually added (deduped against what's already allowed) for the summary.
+ */
+export function applyHostGroups(config: SandboxConfig, groupNames: string[]): string[] {
+  const hosts = groupNames.flatMap((name) => hostGroup(name)?.hosts ?? []);
+  const added = missingAllowHosts(config.egress.allow, hosts);
   if (added.length) config.egress.allow = [...config.egress.allow, ...added].sort();
   return added;
 }
@@ -28,8 +40,9 @@ const AGENT_FILE = 'AGENT.md';
 const AGENT_BODY = `When working in this repo:
 
 - Use \`sandbox npm install\`, not \`npm install\`
-- Use \`sandbox npm run dev\`, not \`npm run dev\`
-- Use \`sandbox npm test\`, not \`npm test\`
+- Use \`sandbox dev\`, not \`npm run dev\`
+- Use \`sandbox test\`, not \`npm test\`
+- Use \`sandbox script build\` when a script name collides with a sandbox command
 - Do not ask for host credentials unless the user explicitly approves a grant
 `;
 
@@ -79,7 +92,7 @@ export function writeAgentArtifacts(cwd: string): AgentArtifacts {
 }
 
 export function initNextCommands(preset: PresetName): string[] {
-  return preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox npm run dev'] : ['sandbox npm install', 'sandbox npm test'];
+  return preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox dev'] : ['sandbox npm install', 'sandbox test'];
 }
 
 /** Post-init tips, one string per tip. Preflight + path apply to every preset; agent adds one. */
@@ -192,11 +205,23 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
   if (p.isCancel(claude)) return cancel();
   config.grants.claude = claude;
 
+  // Opt-in egress bundles. Default-deny stays the default — nothing is preselected; the user
+  // deliberately widens to a curated, labelled group (or none) instead of allowing hosts blind.
+  const groups = await p.multiselect({
+    message: 'Pre-allow any common egress bundles? (default-deny otherwise — you can always add more later)',
+    options: HOST_GROUPS.map((g) => ({ value: g.name, label: g.label, hint: g.why })),
+    required: false,
+    initialValues: [] as string[],
+  });
+  if (p.isCancel(groups)) return cancel();
+  const groupHosts = applyHostGroups(config, groups);
+
   const addedHosts = mergeDetectedEgress(cwd, config);
   const configFile = writeSandboxConfig(cwd, config);
   const agent = preset === 'agent' ? writeAgentArtifacts(cwd) : undefined;
   p.outro(`Wrote sandbox.config.json (${preset})`);
   printInitSummary(preset, configFile, agent, addedHosts);
+  if (groupHosts.length) console.log(`sandbox: added ${groups.join(', ')} group(s) to egress.allow — ${groupHosts.join(', ')}`);
   return 0;
 }
 

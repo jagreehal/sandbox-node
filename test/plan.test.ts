@@ -17,6 +17,7 @@ function facts(over: Partial<ProjectFacts> = {}): ProjectFacts {
     isYarnBerry: false,
     hasLockfile: false,
     hasPackageJson: false,
+    scripts: {},
     directDependencies: [],
     existingPersistencePaths: [],
     homedir: '/home/dev',
@@ -74,6 +75,23 @@ describe('warm cache volume', () => {
   it('honours install.cache=false on the runner path too', () => {
     const plan = planRun(cfg({ install: { cache: false } }), facts(), ['npx', 'cowsay']);
     expect(plan.mounts.some((m) => m.type === 'volume' && m.source?.startsWith('sandbox-cache-'))).toBe(false);
+  });
+});
+
+describe('effective egress allowlist (PM-aware)', () => {
+  it('adds yarn classic’s registry so a yarn install works without widening the committed config', () => {
+    expect(planInstall(cfg(), facts({ pm: 'yarn' })).egressAllow).toEqual(['npmjs.org', 'npmjs.com', 'yarnpkg.com']);
+  });
+
+  it('leaves npm/pnpm/bun on the minimal npm-registry default', () => {
+    for (const pm of ['npm', 'pnpm', 'bun'] as const) {
+      expect(planInstall(cfg(), facts({ pm })).egressAllow).toEqual(['npmjs.org', 'npmjs.com']);
+    }
+  });
+
+  it('never duplicates yarnpkg.com when it is already in the committed allowlist', () => {
+    const plan = planInstall(cfg({ egress: { allow: ['npmjs.org', 'yarnpkg.com'] } }), facts({ pm: 'yarn' }));
+    expect(plan.egressAllow).toEqual(['npmjs.org', 'yarnpkg.com']);
   });
 });
 

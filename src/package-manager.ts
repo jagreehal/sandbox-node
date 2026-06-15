@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
@@ -47,8 +47,20 @@ export function parsePackageManagerField(field: unknown): ParsedPackageManager |
   return { name: name as PackageManager, version, raw: field };
 }
 
+function packageManagerFromManifest(cwd: string): PackageManager | undefined {
+  const file = path.join(cwd, 'package.json');
+  if (!existsSync(file)) return undefined;
+  try {
+    return parsePackageManagerField(JSON.parse(readFileSync(file, 'utf8')).packageManager)?.name;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Detect the package manager from the lockfile present in `cwd` (npm fallback). */
 export function resolvePackageManager(cwd: string): PackageManager {
+  const fromManifest = packageManagerFromManifest(cwd);
+  if (fromManifest) return fromManifest;
   if (existsSync(path.join(cwd, 'pnpm-lock.yaml'))) return 'pnpm';
   if (existsSync(path.join(cwd, 'yarn.lock'))) return 'yarn';
   if (BUN_LOCKFILES.some((f) => existsSync(path.join(cwd, f)))) return 'bun';
@@ -92,6 +104,35 @@ export function pmArgv(pm: PackageManager, mode: InstallMode, args: string[]): s
     case 'bun':
       return ['bun', verb, ...rest];
   }
+}
+
+/**
+ * The native way to invoke a package.json script for each package manager. npm needs `run` and
+ * inserts `--` before script args; pnpm/yarn/bun can execute the script name directly.
+ */
+export function pmScriptArgv(pm: PackageManager, script: string, args: string[]): string[] {
+  switch (pm) {
+    case 'npm':
+      return ['npm', 'run', script, ...(args.length === 0 ? [] : args[0] === '--' ? args : ['--', ...args])];
+    case 'pnpm':
+      return ['pnpm', script, ...args];
+    case 'yarn':
+      return ['yarn', script, ...args];
+    case 'bun':
+      return ['bun', script, ...args];
+  }
+}
+
+/**
+ * A package manager's own default registry host, when it differs from the public npm registry that
+ * is already in the default egress allowlist. Yarn classic (v1) defaults to `registry.yarnpkg.com`
+ * (npm's own CDN mirror — same trust class), and that host is NOT in `.npmrc`, so it can't be
+ * auto-detected like a private registry; without it a plain `yarn install` is blocked on first run.
+ * npm/pnpm/bun all default to `registry.npmjs.org`, already covered. Returns undefined when nothing
+ * extra is needed. Other registries (jsr.io, npmmirror) stay opt-in via the prompt / `sandbox allow`.
+ */
+export function pmDefaultRegistryHost(pm: PackageManager): string | undefined {
+  return pm === 'yarn' ? 'yarnpkg.com' : undefined;
 }
 
 /** Yarn Berry (>=2) projects carry a .yarnrc.yml and use `--immutable`, not `--frozen-lockfile`. */

@@ -18,7 +18,7 @@ boundary.
 | [`yarn/`](./yarn) | `sandbox yarn install` plans yarn via corepack, with `registry.yarnpkg.com` added because yarn's registry is not npm's |
 | [`bun/`](./bun) | `sandbox bun install` plans the standalone bun binary with the same boundary |
 | [`workspace/`](./workspace) | install runs at the workspace root while `run` stays in the package dir you invoked from |
-| [`react-vite/`](./react-vite) | dev server with HMR: `sandbox npm run dev` forwards port 5173, `HOST=0.0.0.0` auto-set by the sandbox so the container-bound dev server is reachable from the host |
+| [`react-vite/`](./react-vite) | dev server with HMR: `sandbox dev` forwards port 5173, `HOST=0.0.0.0` auto-set by the sandbox so the container-bound dev server is reachable from the host |
 
 Each folder is a tiny project with:
 

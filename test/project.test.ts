@@ -26,8 +26,26 @@ describe('probeProject', () => {
     expect(probeProject(project(), cfg()).pm).toBe('npm');
   });
 
+  it('prefers package.json packageManager over lockfile heuristics', () => {
+    expect(probeProject(project({
+      'package.json': JSON.stringify({ packageManager: 'pnpm@11.5.1' }),
+      'package-lock.json': '{}',
+    }), cfg()).pm).toBe('pnpm');
+    expect(probeProject(project({
+      'package.json': JSON.stringify({ packageManager: 'npm@10.9.0' }),
+      'pnpm-lock.yaml': '',
+    }), cfg()).pm).toBe('npm');
+  });
+
   it('reports lockfile presence for either bun lockfile spelling', () => {
     expect(probeProject(project({ 'bun.lockb': '' }), cfg()).hasLockfile).toBe(true);
+  });
+
+  it('reads package.json scripts ({} when absent or unreadable)', () => {
+    expect(probeProject(project({ 'package.json': JSON.stringify({ scripts: { test: 'vitest', dev: 'vite' } }) }), cfg()).scripts).toEqual({ test: 'vitest', dev: 'vite' });
+    expect(probeProject(project({ 'package.json': '{"name":"x"}' }), cfg()).scripts).toEqual({});
+    expect(probeProject(project(), cfg()).scripts).toEqual({});
+    expect(probeProject(project({ 'package.json': '{ not json' }), cfg()).scripts).toEqual({});
   });
 
   it('reports lockfile + manifest presence for the detected pm', () => {

@@ -102,6 +102,13 @@ describe('routePassthrough — run', () => {
     expect(route('pnpm dlx cowsay hi')).toEqual({ model: 'run', argv: ['pnpm', 'dlx', 'cowsay', 'hi'] });
     expect(route('npm exec -- tsc')).toEqual({ model: 'run', argv: ['npm', 'exec', '--', 'tsc'] });
   });
+
+  it('routes the monorepo task runners (turbo/nx) verbatim', () => {
+    expect(route('turbo run build')).toEqual({ model: 'run', argv: ['turbo', 'run', 'build'] });
+    expect(route('turbo dev --filter=web')).toEqual({ model: 'run', argv: ['turbo', 'dev', '--filter=web'] });
+    expect(route('nx build web')).toEqual({ model: 'run', argv: ['nx', 'build', 'web'] });
+    expect(route('nx run-many -t test')).toEqual({ model: 'run', argv: ['nx', 'run-many', '-t', 'test'] });
+  });
 });
 
 describe('routePassthrough — bun', () => {

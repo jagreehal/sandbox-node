@@ -63,7 +63,7 @@ function reason(command: string): string {
     '',
     `Re-run it as:  sandbox ${command.trim()}`,
     '',
-    'Examples: `sandbox npm install`, `sandbox pnpm add zod`, `sandbox npm run dev`, `sandbox npx vite`.',
+    'Examples: `sandbox npm install`, `sandbox dev`, `sandbox test`, `sandbox npx vite`.',
     'If you genuinely need to bypass containment once, ask the user to run the command themselves.',
   ].join('\n');
 }
@@ -152,7 +152,7 @@ process.stdin.on('end', () => {
     'Blocked by sandbox: run package-manager commands through \`sandbox\` so install/run\\n' +
     'happens inside containment (host credentials stay out, egress is default-deny).\\n\\n' +
     'Re-run it as:  sandbox ' + hit + '\\n\\n' +
-    'Examples: \`sandbox npm install\`, \`sandbox pnpm add zod\`, \`sandbox npm run dev\`, \`sandbox npx vite\`.\\n' +
+    'Examples: \`sandbox npm install\`, \`sandbox dev\`, \`sandbox test\`, \`sandbox npx vite\`.\\n' +
     'If you genuinely need to bypass containment once, ask the user to run the command themselves.\\n'
   );
   process.exit(2);

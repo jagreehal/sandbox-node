@@ -323,6 +323,16 @@ describe('cli (golden, no docker)', () => {
     expect(dev.ports).toContain('5173:5173');
   });
 
+  it('--allow-build-hosts widens egress to the curated native-build hosts (still default-deny otherwise)', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' });
+    const base = JSON.parse((await runCli(dir, ['--json', 'install'])).stdout);
+    expect(base.egressAllow).toEqual(['npmjs.org', 'npmjs.com']); // unchanged without the flag
+    const widened = JSON.parse((await runCli(dir, ['--json', '--allow-build-hosts', 'install'])).stdout);
+    expect(widened.network).toBe('allowlist'); // still an allowlist, NOT full network
+    expect(widened.egressAllow).toEqual(expect.arrayContaining(['npmjs.org', 'nodejs.org', 'github.com', 'binaries.prisma.sh']));
+    expect(widened.egressAllow).not.toContain('exfil.example.com');
+  });
+
   it('--json install: writable root, locked manifest + persistence paths', async () => {
     const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
     const { code, stdout } = await runCli(dir, ['--json', 'install']);
@@ -411,6 +421,111 @@ describe('cli (golden, no docker)', () => {
     const plan = JSON.parse(stdout);
     expect(plan.argv).toEqual(['npm', 'run', 'dev']);
     expect(plan.interactive).toBe(true);
+  });
+
+  it('auto-script: `sandbox <script>` uses packageManager-native argv', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({
+        name: 'x',
+        packageManager: 'pnpm@11.5.1',
+        scripts: { test: 'vitest' },
+      }),
+      'package-lock.json': '{}',
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'test']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['pnpm', 'test']);
+    expect(plan.interactive).toBe(true);
+  });
+
+  it('auto-script: npm inserts `--` before forwarded script args', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({
+        name: 'x',
+        packageManager: 'npm@10.9.0',
+        scripts: { lint: 'eslint .' },
+      }),
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'lint', '--fix']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['npm', 'run', 'lint', '--', '--fix']);
+  });
+
+  it('`sandbox dev` falls back to start/serve and still uses native argv', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({
+        name: 'x',
+        packageManager: 'pnpm@11.5.1',
+        scripts: { start: 'vite preview' },
+      }),
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'dev', '--', '--host']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['pnpm', 'start', '--', '--host']);
+    expect(plan.network).toBe('on');
+    expect(plan.env.HOST).toBe('0.0.0.0');
+  });
+
+  it('builtin commands keep precedence over script fallback for best-effort predictability', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({
+        name: 'x',
+        packageManager: 'pnpm@11.5.1',
+        scripts: { build: 'vite build' },
+      }),
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'build']);
+    expect(code).toBe(0);
+    expect(stdout).toContain('"tag"');
+    expect(stdout).not.toContain('vite build');
+  });
+
+  it('`sandbox script <name>` runs a colliding package.json script natively', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({
+        name: 'x',
+        packageManager: 'pnpm@11.5.1',
+        scripts: { build: 'vite build' },
+      }),
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'script', 'build', '--watch']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['pnpm', 'build', '--watch']);
+  });
+
+  it('`sandbox dev` opens dev-mode networking through the single effective config', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'x', packageManager: 'pnpm@11.5.1', scripts: { dev: 'vite' } }),
+    });
+    const { code, stdout } = await runCli(dir, ['--json', 'dev']);
+    expect(code).toBe(0);
+    const plan = JSON.parse(stdout);
+    expect(plan.argv).toEqual(['pnpm', 'dev']);
+    expect(plan.network).toBe('on'); // same as the `--dev` global one-off mode
+    expect(plan.env.HOST).toBe('0.0.0.0');
+  });
+
+  it('preflight resolves package.json scripts too (run route → nothing to install → clean exit)', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'x', packageManager: 'pnpm@11.5.1', scripts: { test: 'vitest' } }),
+    });
+    // `sandbox test` is a script, not a pm command — preflight used to reject it as "unknown".
+    const { code } = await runCli(dir, ['--min-release-age', '7', 'preflight', 'test']);
+    expect(code).toBe(0);
+  });
+
+  it('unknown command surfaces one consistent error from both the run and preflight paths', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' });
+    const run = await runCli(dir, ['definitely-not-a-script']);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("unknown command 'definitely-not-a-script'");
+    const pre = await runCli(dir, ['preflight', 'definitely-not-a-script']);
+    expect(pre.code).toBe(1);
+    expect(pre.stderr).toContain("unknown command 'definitely-not-a-script'");
   });
 
   it('pass-through: `npm audit fix` maps to the install-class audit-fix model', async () => {
@@ -518,7 +633,7 @@ describe('cli (golden, no docker)', () => {
     expect(stdout).toContain('sandbox: building node-install-sandbox:latest and the egress proxy image');
     expect(stdout).toContain('sandbox: vibe preset');
     expect(stdout).toContain('sandbox npm install');
-    expect(stdout).toContain('sandbox npm run dev');
+    expect(stdout).toContain('sandbox dev');
     expect(existsSync(path.join(dir, 'sandbox.config.json'))).toBe(true);
   });
 

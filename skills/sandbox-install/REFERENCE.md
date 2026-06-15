@@ -2,6 +2,18 @@
 
 CLI: `@jagreehal/sandbox-node` (binaries: `sandbox`, `sandbox-node`).
 
+## Script commands
+
+For `package.json` scripts, the preferred form is:
+
+- `sandbox dev`
+- `sandbox test`
+- `sandbox lint`
+
+The CLI picks the package manager from `package.json#packageManager` when present, else from the
+lockfile. It then runs the script with the native syntax for that manager. When a script name
+collides with a sandbox command such as `build`, use `sandbox script build`.
+
 ## `preflight` command (the review pass)
 
 ```
@@ -161,6 +173,7 @@ commands hit the real tool untouched.
 | `--allow-recent <pat>` | Exempt a package-name pattern from the age gate (repeatable; globs ok, e.g. `@scope/*`). |
 | `--deep` | Apply the age gate to the whole resolved tree (lockfile), not just direct deps. |
 | `--risk <off\|basic>` | Disable/enable registry risk hints. |
+| `--allow-build-hosts` | Add the curated native-build/release hosts (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron binaries) to the egress allowlist for this run. **Still default-deny** — a bigger allowlist, not full network. Use when a `postinstall` binary download is blocked; prefer `sandbox allow <host>` when only one host is needed. |
 | `--canaries` / `--no-canaries` | Plant fake AWS/Stripe/Slack honeytokens in the install container and fail the run if one reaches the egress proxy log — a credential-theft tripwire on top of default-deny egress. Allowlist egress only; **on by default in the `strict`/`agent` presets**. Names no package manager reads, so it can't break an install; `--no-canaries` turns it off for one run. Applies to the real install, not the `preflight` review pass. |
 | `--dry-run` | Preview mounts/allowlist/command, then stop. On `install`/`add`/`run` this **skips the preflight**; use the `preflight` command for the review pass instead. |
 | `--json` | On `preflight`, prints the findings report (above). On `install`/`add`/`run`, prints the resolved plan and skips the preflight. |
@@ -188,6 +201,10 @@ Output shapes to recognize:
   `sandbox --allow-recent <pkg> --fail-on-advisory <pm> install`
 - Accept all fresh releases this once: add `--min-release-age 0`.
 - Pin a known-good older version instead of latest: `sandbox <pm> add <pkg>@<version>`.
+- Native module's `postinstall` blocked on a build host (node-gyp/Prisma/Playwright/…):
+  re-run with `--allow-build-hosts` (curated bundle, still default-deny), or allow the exact
+  host: `sandbox allow <host>`. Persist for the project via the `build-tools` group in
+  `sandbox init`, or by adding the host to `egress.allow`.
 - Persist a tolerance in `sandbox.config.json`: `install.minReleaseAgeExclude`,
   `install.minReleaseAgeDays`, `install.failOnAdvisory`, `install.failOnRisk`.
 

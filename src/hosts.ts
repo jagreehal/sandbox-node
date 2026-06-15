@@ -53,6 +53,20 @@ const HOST_RULES: readonly HostRule[] = [
   { suffix: 'electronjs.org', category: 'native-build', why: 'Electron binaries (postinstall download)', common: true },
 ];
 
+/** Categories that fetch binaries/headers/source during install — the "build host" bundle. */
+const BUILD_HOST_CATEGORIES: ReadonlySet<HostCategory> = new Set(['native-build', 'cdn', 'git-source']);
+
+/**
+ * The curated hosts a native/postinstall build legitimately downloads from (Node headers, GitHub
+ * release assets, Prisma/Playwright/Cypress/Electron binaries, …). Derived from {@link HOST_RULES}
+ * so there's one source of truth — `--allow-build-hosts` and the `build-tools` host group both use it.
+ * Registries are deliberately excluded (a different trust concern; the PM's own registry is handled
+ * separately).
+ */
+export function buildHostSuffixes(): string[] {
+  return HOST_RULES.filter((r) => BUILD_HOST_CATEGORIES.has(r.category)).map((r) => r.suffix);
+}
+
 /** The bare host (lowercased, no port) — tolerant of accidental `host:port` or trailing dot. */
 function normalizeHost(host: string): string {
   return host.trim().toLowerCase().replace(/\.$/, '').replace(/:\d+$/, '');

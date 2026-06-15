@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { NetworkMode, SandboxConfig } from './config.js';
 import { type BuildSpec, resolveBuildSpec } from './image.js';
 import { COMMON_DEV_PORTS, networkPolicy } from './network.js';
-import { frozenInstallArgv, lockfileName, packageManagerCacheDir, pmArgv, type PackageManager } from './package-manager.js';
+import { frozenInstallArgv, lockfileName, packageManagerCacheDir, pmArgv, pmDefaultRegistryHost, type PackageManager } from './package-manager.js';
 import { PERSISTENCE_PATHS, type ProjectFacts } from './project.js';
 
 /**
@@ -120,6 +120,16 @@ function baseEnv(config: SandboxConfig, facts: ProjectFacts, opts: PlanOptions):
   return env;
 }
 
+/**
+ * The effective allowlist for this run: the committed `egress.allow` plus the resolved package
+ * manager's own default registry host when that isn't already covered (yarn → yarnpkg.com). Keeps
+ * the stored config minimal (just the npm registry) while letting a yarn install work out of the box.
+ */
+function effectiveEgressAllow(config: SandboxConfig, pm: PackageManager): string[] {
+  const pmHost = pmDefaultRegistryHost(pm);
+  return pmHost && !config.egress.allow.includes(pmHost) ? [...config.egress.allow, pmHost] : config.egress.allow;
+}
+
 function commonPlan(config: SandboxConfig, facts: ProjectFacts, network: NetworkMode, opts: PlanOptions): Omit<RunPlan, 'argv' | 'mounts' | 'ports' | 'interactive' | 'workdir'> {
   const image = opts.image ?? config.image;
   return {
@@ -127,7 +137,7 @@ function commonPlan(config: SandboxConfig, facts: ProjectFacts, network: Network
     build: resolveBuildSpec(config, image, facts.cwd),
     env: baseEnv(config, facts, opts),
     network,
-    egressAllow: config.egress.allow,
+    egressAllow: effectiveEgressAllow(config, facts.pm),
     capDrop: ['ALL'],
     securityOpt: ['no-new-privileges'],
     addHosts: networkPolicy(network).hostGateway ? ['host.docker.internal:host-gateway'] : [],

@@ -9,6 +9,10 @@
       "default": "node-install-sandbox:latest",
       "type": "string"
     },
+    "updateCheck": {
+      "default": true,
+      "type": "boolean"
+    },
     "grants": {
       "default": {
         "ssh-agent": false,
@@ -258,6 +262,7 @@
   },
   "required": [
     "image",
+    "updateCheck",
     "grants",
     "install",
     "egress",
