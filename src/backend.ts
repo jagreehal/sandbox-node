@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBuildReporter, type BuildReporter } from './build-progress.js';
 import { withEgress, type EgressHandle } from './egress.js';
-import { capture, quiet, run } from './exec.js';
+import { capture, quiet, run, type CaptureResult } from './exec.js';
 import { classifyImageState, customDockerfileWarnings, derivedDockerfile, extraStepsNeedRepoContext, hasExtraLayer, isCustomBuild, specFingerprint, SPEC_LABEL, type BuildSpec, type ImageState } from './image.js';
 import { log } from './log.js';
 import type { RunPlan } from './plan.js';
@@ -23,7 +23,10 @@ export interface ContainerBackend {
   readonly bin: string;
   ensureImage(spec: BuildSpec): Promise<void>;
   buildImages(spec: BuildSpec): Promise<number>;
+  /** Run the plan with inherited stdio (the interactive/CLI path); resolves with the exit code. */
   runPlan(plan: RunPlan, override?: RunOverride): Promise<number>;
+  /** Run the plan capturing stdout/stderr (the embedded/programmatic path, e.g. {@link runCode}). */
+  runPlanCaptured(plan: RunPlan, override?: RunOverride): Promise<CaptureResult>;
   withEgress<T>(allow: string[], fn: (handle: EgressHandle) => Promise<T>, onDenials?: (hosts: string[]) => void, onLog?: (logText: string) => void): Promise<T>;
 }
 
@@ -160,6 +163,7 @@ export function createBackend(bin: 'docker' | 'podman' = 'docker', backendOpts: 
       return run(bin, ['build', '-t', PROXY_IMAGE, join(assetsRoot(), 'proxy')]);
     },
     runPlan: (plan, override) => run(bin, renderRunArgs(plan, override)),
+    runPlanCaptured: (plan, override) => capture(bin, renderRunArgs(plan, override)),
     withEgress: async (allow, fn, onDenials, onLog) => {
       await ensureSimple(PROXY_IMAGE, join(assetsRoot(), 'proxy'));
       return withEgress(bin, PROXY_IMAGE, allow, fn, onDenials, onLog);

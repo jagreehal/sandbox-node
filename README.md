@@ -1259,7 +1259,7 @@ const code = await execute(plan, createBackend('docker'));
 - `planRun(config, facts, argv, opts?) -> RunPlan`
 - `routePassthrough(argv) -> Route | undefined` — classify `npm install`/`pnpm add`/`npm run dev`/… into a containment model
 - `networkPolicy(mode) -> { isolate, hostGateway, publishPorts, useEgressProxy }`
-- `execute(plan, backend?) -> Promise<number>`
+- `execute(plan, backend?, opts?) -> Promise<ExecuteResult>` — `{ code, deniedHosts, canaryHits, stdout?, stderr? }` (`stdout`/`stderr` present only with `{ capture: true }`)
 - `createBackend('docker' | 'podman') -> ContainerBackend`
 - `renderRunArgs(plan, override?) -> string[]`
 
@@ -1267,6 +1267,56 @@ const code = await execute(plan, createBackend('docker'));
 `ProjectFacts` always yield the same `RunPlan`. `RunPlan` is pure data: `image`, `argv`, `env`,
 `mounts`, `ports`, `network`, `egressAllow`, and security flags. It does not hold per-run network
 names or proxy wiring. `execute()` adds that mechanism when it runs the plan.
+
+## Run untrusted / AI-generated code: `runCode`
+
+Point `runCode` at a snippet your AI agent generated. It runs inside the same throwaway container
+that wraps your installs, with no host credentials and no network unless you grant it:
+
+```ts
+import { runCode } from '@jagreehal/sandbox-node';
+
+const { stdout, exitCode } = await runCode('console.log(1 + 1)');
+// stdout === '2\n', exitCode === 0
+```
+
+```ts
+// TypeScript runs as-is. Node strips the types, so no compiler and no network fetch:
+await runCode('const n: number = 21; console.log(n * 2)', { language: 'ts' }); // stdout '42\n'
+
+// A real wall-clock timeout. A separate process enforces it, so a busy loop can't outrun it:
+const r = await runCode('while (true) {}', { timeoutMs: 1500 });
+// r.timedOut === true, r.exitCode === 124
+
+// No network by default. Grant a default-deny allowlist when the code needs one host:
+await runCode('const res = await fetch("https://api.example.com/x"); console.log(await res.text())', {
+  network: 'allowlist',
+  allow: ['api.example.com'],
+}); // result.deniedHosts lists anything the allowlist blocked
+
+// Multi-file programs and env vars:
+await runCode("import { greet } from './lib.mjs'; console.log(greet('world'))", {
+  files: { 'lib.mjs': 'export const greet = (n) => `hi ${n}`' },
+  env: { TZ: 'UTC' },
+});
+```
+
+Returns `{ stdout, stderr, exitCode, timedOut, durationMs, deniedHosts }`.
+
+**Stronger than `vm` or an in-process sandbox.** `vm.runInThisContext` and the old "sandbox"
+packages give you no security boundary. [Node's docs](https://nodejs.org/api/vm.html) say so. One
+line escapes `runInThisContext`: `this.constructor.constructor('return process')().exit()`. A
+`while (true) {}` defeats a `vm` timeout, because the loop never yields the event loop. `runCode`
+shuts both down. Your code runs in a throwaway container with no host credentials and no network by
+default, and `timeout(1)` enforces the deadline from the container's init process, the parent of
+your code. A loop that never yields cannot pause or outrun it.
+
+**The boundary, stated plainly.** This is container isolation. The kernel is shared, so a kernel
+exploit can still escape. `timeout(1)` enforces the deadline inside the container, not from a host
+supervisor, and no second host-side cap backs it up. That holds for untrusted JavaScript and
+TypeScript. It will not stop a container escape. To run hostile or multi-tenant workloads, put a
+microVM (gVisor or Firecracker) underneath. You need Docker or Podman running. The first call
+builds the image, and later calls reuse it.
 
 ## Presets (`sandbox init`)
 

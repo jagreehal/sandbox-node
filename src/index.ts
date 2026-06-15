@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
-import { createBackend, type ContainerBackend } from './backend.js';
+import { createBackend, type ContainerBackend, type RunOverride } from './backend.js';
 import { log } from './log.js';
 import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
@@ -39,6 +39,7 @@ export {
 } from './devcontainer.js';
 export { runSetup, type SetupOptions } from './setup.js';
 export { createBackend, renderRunArgs, type ContainerBackend, type RunOverride } from './backend.js';
+export { runCode, type RunCodeOptions, type RunCodeResult, type CodeLanguage } from './code.js';
 export { EgressError, parseEgressDenials, type EgressHandle } from './egress.js';
 export { createLogger, formatEvent, log, type Logger, type LogLevel } from './log.js';
 export { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress, type BlockedEgressChoice } from './interactive.js';
@@ -137,6 +138,8 @@ export interface ExecuteOptions {
   failOnEgress?: boolean;
   /** Plant canary honeytokens in the container env and watch the proxy log for them (allowlist mode only). */
   canary?: Canary;
+  /** Capture the command's stdout/stderr into the result instead of inheriting the host's stdio. */
+  capture?: boolean;
 }
 
 export interface ExecuteResult {
@@ -144,6 +147,10 @@ export interface ExecuteResult {
   deniedHosts: string[];
   /** Canary nonces caught in the egress log — a planted credential left the box. Empty unless canaries ran. */
   canaryHits: string[];
+  /** The command's stdout, present only when {@link ExecuteOptions.capture} was set. */
+  stdout?: string;
+  /** The command's stderr, present only when {@link ExecuteOptions.capture} was set. */
+  stderr?: string;
 }
 
 /**
@@ -191,14 +198,22 @@ export async function execute(
     const hostPorts = plan.ports.map((p) => p.split(':')[0]);
     log.info(`dev server ports forwarded: ${hostPorts.join(', ')} — open http://localhost:<port> in your browser`, { ports: hostPorts });
   }
+  // Realize the plan one way or the other: inherit the host's stdio (the interactive/CLI path) or
+  // capture stdout/stderr into the result (embedded callers like {@link runCode}). Both the egress
+  // and isolated branches below share this single seam, so capture works for every network mode.
+  const realize = (override: RunOverride): Promise<{ code: number; stdout?: string; stderr?: string }> =>
+    opts.capture ? backend.runPlanCaptured(plan, override) : backend.runPlan(plan, override).then((code) => ({ code }));
+  // Captured output is reported ONLY when the caller asked to capture — so a normal (stdio-inherited)
+  // run leaves `stdout`/`stderr` absent from the result rather than carrying `undefined` values.
+  const captured = (out: { stdout?: string; stderr?: string }) => (opts.capture ? { stdout: out.stdout ?? '', stderr: out.stderr ?? '' } : {});
   try {
     if (policy.useEgressProxy) {
       const denied: string[] = [];
       const canaryHits: string[] = [];
-      const code = await backend.withEgress(
+      const out = await backend.withEgress(
         plan.egressAllow,
         // Plant the canary honeytokens alongside the proxy env so a credential-harvester finds them.
-        ({ network, proxyEnv }) => backend.runPlan(plan, { network, extraEnv: { ...proxyEnv, ...opts.canary?.env } }),
+        ({ network, proxyEnv }) => realize({ network, extraEnv: { ...proxyEnv, ...opts.canary?.env } }),
         (hosts) => denied.push(...hosts),
         opts.canary ? (logText) => canaryHits.push(...scanCanaryLog(logText, opts.canary!).map((h) => h.line)) : undefined,
       );
@@ -208,26 +223,31 @@ export async function execute(
         log.error('CANARY TRIPPED — a planted honeytoken credential left the sandbox; treat this as a live exfiltration attempt', { lines: canaryHits.slice(0, 5) });
       }
       if (denied.length) {
-        // What happened: a dependency tried to reach a host that isn't allowlisted.
-        log.warn(`sandbox blocked ${denied.length} network request(s) to host(s) not on your egress allowlist`, { hosts: denied });
-        const add = missingAllowHosts(plan.egressAllow, denied);
-        if (add.length) {
-          // What to type next: the persistent fix (allow the host) and the one-off escape hatch.
-          log.info(`This is the default-deny egress guard. Often a package fetching native headers (e.g. nodejs.org).`);
-          log.info(`If you trust ${add.length === 1 ? add[0] : 'these hosts'}, allow them for this repo: ${renderAllowCommand(add)}`);
-          log.info(`Config preview:\n${renderAllowlistSnippet(plan.egressAllow, add)}`);
-          log.info('Or run this once with full network (no allowlist): re-run with --full-network');
+        // Captured/embedded callers (e.g. runCode) own their output and get `deniedHosts` back in the
+        // result — keep this human-facing advice off their stderr. Only the interactive path narrates it.
+        if (!opts.capture) {
+          // What happened: a dependency tried to reach a host that isn't allowlisted.
+          log.warn(`sandbox blocked ${denied.length} network request(s) to host(s) not on your egress allowlist`, { hosts: denied });
+          const add = missingAllowHosts(plan.egressAllow, denied);
+          if (add.length) {
+            // What to type next: the persistent fix (allow the host) and the one-off escape hatch.
+            log.info(`This is the default-deny egress guard. Often a package fetching native headers (e.g. nodejs.org).`);
+            log.info(`If you trust ${add.length === 1 ? add[0] : 'these hosts'}, allow them for this repo: ${renderAllowCommand(add)}`);
+            log.info(`Config preview:\n${renderAllowlistSnippet(plan.egressAllow, add)}`);
+            log.info('Or run this once with full network (no allowlist): re-run with --full-network');
+          }
         }
-        if (opts.failOnEgress) return auditRun(plan, { code: code === 0 ? 1 : code, deniedHosts: denied, canaryHits });
+        if (opts.failOnEgress) return auditRun(plan, { code: out.code === 0 ? 1 : out.code, deniedHosts: denied, canaryHits, ...captured(out) });
       }
       // A canary hit is proof of theft, so it fails the run unconditionally — unlike a denied host
       // (which can be benign, e.g. nodejs.org headers), there's no innocent reason a honeytoken leaks.
-      const finalCode = canaryHits.length && code === 0 ? 1 : code;
-      return auditRun(plan, { code: finalCode, deniedHosts: denied, canaryHits });
+      const finalCode = canaryHits.length && out.code === 0 ? 1 : out.code;
+      return auditRun(plan, { code: finalCode, deniedHosts: denied, canaryHits, ...captured(out) });
     }
     // isolate -> `--network none`; otherwise the default bridge (no explicit --network).
     const network = policy.isolate ? 'none' : undefined;
-    return auditRun(plan, { code: await backend.runPlan(plan, { network }), deniedHosts: [], canaryHits: [] });
+    const out = await realize({ network });
+    return auditRun(plan, { code: out.code, deniedHosts: [], canaryHits: [], ...captured(out) });
   } finally {
     if (workspaceRoot && before && kind !== 'other') {
       const after = snapshotTree(workspaceRoot);
