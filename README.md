@@ -27,7 +27,7 @@ Put `sandbox` in front of the npm/pnpm/yarn/bun command you already run. Install
 (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token,
 cloud credentials, or editor/agent state unless you explicitly grant it.
 
-If you want the reasoning before the command reference, read the three short posts first:
+For the reasoning before the command reference, read these three short posts first:
 
 - [npm install runs code you never read](https://arrangeactassert.com/posts/npm-install-runs-code-you-never-read/)
 - [How sandbox runs risky installs in a throwaway container](https://arrangeactassert.com/posts/how-sandbox-runs-risky-installs-in-a-throwaway-container/)
@@ -47,26 +47,26 @@ sandbox npx vite             # one-off tools too
 
 Works with **npm, pnpm, yarn, and bun** (`install` / `ci` / `add` / `update` / `audit fix` and any
 run/exec script), plus runners like `npx`, `bunx`, `node`, `tsx`, and `vite`. Install scripts still
-work; your secrets just aren't there to steal.
+work; your secrets aren't there to steal.
 
 The image pre-activates pnpm and yarn so installs never download a package manager at run time. If
 your `package.json` pins a different version with `"packageManager"` (e.g. `pnpm@11.5.3`), that exact
-version is baked into the image at build time instead — so corepack never has to reach the registry
+version is baked into the image at build time instead, so corepack never has to reach the registry
 through the egress proxy mid-install. The first run after pinning (or changing) it rebuilds the image.
 
 pnpm note: because the bind-mounted workspace is a different device than pnpm's store, pnpm keeps its
 content store in the project (`.pnpm-store/`). The resulting `node_modules` is tied to that in-project
-store, so run later commands through `sandbox` to reuse it as-is running pnpm directly on the host
+store, so run later commands through `sandbox` to reuse it as-is. Running pnpm directly on the host
 rebuilds `node_modules` against the host's own store.
 
-Anything that pulls *new* versions is gated the same way as install — the release-age cooldown, OSV
+Anything that pulls *new* versions is gated the same way as install: the release-age cooldown, OSV
 malware check, and risk hints resolve against the versions the command would pull, so a
 freshly-published malicious bump is caught before it's fetched:
 
-- `sandbox npm update` (and `pnpm up`, `yarn upgrade`, `bun update`) — update existing deps within range.
-- `sandbox upgrade` — move the declared ranges *past* their current bounds (including majors), the
+- `sandbox npm update` (and `pnpm up`, `yarn upgrade`, `bun update`): update existing deps within range.
+- `sandbox upgrade` moves the declared ranges *past* their current bounds (including majors), the
   one thing `npm update` won't do. See [Upgrade ranges safely](#upgrade-ranges-safely--sandbox-upgrade).
-- `sandbox npm audit fix` (and `pnpm audit --fix`) — remediate vulnerabilities by pulling fixed
+- `sandbox npm audit fix` (and `pnpm audit --fix`): remediate vulnerabilities by pulling fixed
   versions. (Yarn and bun have no in-place audit-fix command.)
 
 Two commands stay intentionally narrow: `bun upgrade` upgrades the bun *binary*, not your packages,
@@ -86,7 +86,7 @@ sandbox npm install
 sandbox dev                  # http://localhost:5173 (common dev ports auto-forwarded)
 ```
 
-For coding agents (Claude Code, Cursor, …), `sandbox setup --agent` always writes the agent
+For coding agents (Claude Code, Cursor, …), `sandbox setup --agent` writes the agent
 artifacts: `.sandbox/AGENT.md` (repo-local guidance the agent reads) plus two merges into
 `.claude/settings.json`: a **`PreToolUse` hook** that blocks a bare `npm install` / `pnpm add` /
 `npx …` on the host, and **`permissions.deny` rules** so the agent can't read `.env` or `secrets/**`
@@ -105,16 +105,16 @@ To contain the agent's whole blast radius, run it inside a generated devcontaine
 ---
 
 > **Why this exists.** npm supply-chain attacks keep landing: a compromised dependency runs
-> code at install time with the same ambient access you have — so it can read your SSH keys,
+> code at install time with the same ambient access you have, so it can read your SSH keys,
 > the npm token in `~/.npmrc`, and cloud credentials, then exfiltrate them or plant
 > persistence. The usual advice ("audit your deps", "use `--ignore-scripts`") is partial:
 > `node-gyp` runs without a lifecycle script, and you can't read every transitive package.
-> This tool takes a different tack — run installs where there's nothing ambient to steal.
+> This tool takes a different tack: run installs where there's nothing ambient to steal.
 
 This is **install-time containment, not a general sandbox.** `sandbox npm install` is a
 transparent prefix: under the hood it maps to the same install / add / update / run containment
 models as the explicit `sandbox install` / `add` / `run` commands (kept as expert and CI forms). It's the
-Node member of a `sandbox-*` family (a `sandbox-python` could follow, owning `pip`/`uv`).
+Node member of a `sandbox-*` family; a `sandbox-python` could follow, owning `pip`/`uv`.
 
 Here is the real attack these worms run, and the three independent places `sandbox` cuts it:
 
@@ -142,15 +142,15 @@ cd demo && sandbox install --foreground-scripts   # runs a simulated malicious p
 `--foreground-scripts` is a plain npm flag passed straight through; the demo only uses it so you
 can see the lifecycle script's output inline. You don't need it for normal installs. In the sandbox
 the script finds no credentials and can't write to persistence paths; the same script on the host
-would harvest your `~/.npmrc` and `~/.aws/credentials`. See [Quick Start](#quick-start).
+harvests your `~/.npmrc` and `~/.aws/credentials`. See [Quick Start](#quick-start).
 
 ## Protected by default
 
-- **Credentials** — no `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
-- **Persistence** — `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.claude-sandbox`, `.cursor`, `.gemini`,
+- **Credentials**: no `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
+- **Persistence**: `.git`, `.github`, `.gitlab`, `.husky`, `.claude`, `.claude-sandbox`, `.cursor`, `.gemini`,
   `.vscode`, and `package.json` are read-only, so an install can't plant auto-running hooks.
-- **Egress** — default-deny; install reaches only the registry hosts in `egress.allow`.
-- **Capabilities** — `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
+- **Egress**: default-deny; install reaches only the registry hosts in `egress.allow`.
+- **Capabilities**: `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
 
 Install-time registry risk hints are also on by default. They are not a full audit; they are
 high-signal prompts for direct packages, while containment remains the main protection.
@@ -163,25 +163,25 @@ high-signal prompts for direct packages, while containment remains the main prot
 | Anything you **grant** | ssh-agent, `paths`, `env`, `network: "on"` are explicit opt-ins | grant the minimum; prefer ssh-agent over mounting key files |
 | **Network in `run`/`shell`** beyond your config | dev servers/DBs often need it | `run.network` defaults to `none`; widen deliberately |
 
-So `sandbox npm install` is **not** "my repo cannot change" — a dependency can still edit a tracked
+So `sandbox npm install` does not mean "my repo cannot change": a dependency can still edit a tracked
 source file (you'll see it in `git diff`). It blocks credential theft, persistence, and
 exfiltration; it promises source immutability only under `--frozen` (every package manager except
 pnpm). See [Install Boundary](#install-boundary).
 
 > ⚠️ **Your source tree stays writable by default.** A malicious dependency can overwrite files in
 > `src/`, `lib/`, or anywhere in the project root during install. `sandbox` stops it from stealing
-> credentials, planting persistence, or phoning out — it does not stop it editing your code.
+> credentials, planting persistence, or phoning out; it does not stop it editing your code.
 > Use `--frozen` for a read-only source tree (npm, yarn, and bun; pnpm keeps a writable root because
 > it writes temp files there, so on pnpm `--frozen` locks the lockfile but not the whole tree), and
 > review `git diff` after any install from an untrusted source.
 
 ## Isolating the agent itself: two lifecycles
 
-You can mean two things by "sandbox my AI coding setup", and they're easy to conflate:
+"Sandbox my AI coding setup" can mean two things, and they're easy to conflate:
 
 1. **Contain the dangerous *operation*.** `npm install` and `npx` run untrusted dependency code,
    the supply-chain vector. `sandbox` does this by default: the agent and editor stay on your host,
-   each risky op runs in a throwaway container, and `sandbox` tears it down after.
+   each risky op runs in a throwaway container, and `sandbox` tears it down afterward.
 2. **Isolate the *agent itself*.** Stop the agent reaching files or credentials it shouldn't across
    your whole machine. A **devcontainer or VM** does this: the agent and editor live *inside* the
    jail for the whole session.
@@ -216,8 +216,8 @@ persistent mode inherits the ephemeral mode's hardening: a non-root user, the de
 firewall, Claude Code via the official feature, and a persistent `~/.claude` volume. The two aren't
 byte-identical policy. The persistent form is always a networked, long-lived session, and its
 firewall allows your `egress.allow` **plus** the domains Claude itself needs (`api.anthropic.com`
-and friends), since the agent now runs inside. Same config, same hardening principles, wider
-allowlist because the agent moved in.
+and friends), since the agent now runs inside. The config and hardening principles match the
+ephemeral mode; the allowlist widens because the agent moved in.
 
 > **Don't nest them.** Inside the generated devcontainer, run plain `npm install`. Don't use
 > `sandbox npm install` in here: the whole environment already **is** the sandbox, and a second
@@ -227,13 +227,13 @@ allowlist because the agent moved in.
 ### Enforce the prefix with a hook
 
 A boundary set once beats a prompt on every action. Per-action approval trains you to skim and then
-to click through; Anthropic's own testing found developers hit this "approval fatigue" within the
+click through; Anthropic's testing found developers hit this "approval fatigue" within the
 first hour. So the `agent` preset sets the boundary instead of asking: `.sandbox/AGENT.md` *asks*
 the agent to use `sandbox`, and a `PreToolUse` hook *enforces* it. The hook
 (`.sandbox/hooks/enforce-sandbox.mjs`, wired into `.claude/settings.json`) denies a bare
 `npm install` / `pnpm add` / `npx …` before it runs and tells the agent to re-run it through
 `sandbox`. Read-only commands (`npm ls`, `npm view`, …) pass through untouched. A model that ignores
-the markdown instructions still hits the hook.
+the markdown instructions hits the hook anyway.
 
 The same `--agent` run also adds `permissions.deny` rules for `.env`, `.env.*`, and `secrets/**`.
 The container hides host credentials from the *install*, but a host-side agent could still read a
@@ -247,7 +247,7 @@ sandbox init --agent          # AGENT.md + the PreToolUse hook + secret-deny rul
 
 Two caveats. The hook is **best-effort defense-in-depth, not a sandbox boundary**: it depends on
 Claude Code's `PreToolUse` hook API, and a different agent (or a future API change) won't honour
-it — the real containment is still `sandbox` running the command in a container. And it edits
+it; the real containment is still `sandbox` running the command in a container. And it edits
 `.claude/settings.json` by **merging** into your existing config; if that file isn't valid JSON,
 `sandbox` leaves it untouched and prints the snippet to add by hand rather than risk clobbering it.
 Review the merged result.
@@ -294,8 +294,8 @@ pin the digest.
 
 `sandbox install` is the containment; **`sandbox-install`** is a Claude Code skill that puts a review
 step in front of it. Instead of letting an agent install blind, the skill has it run `sandbox preflight`
-first — the same release-age, malware, deprecation, and risk-hint gates as a real install, but it
-installs **nothing** — then surface each finding with a recommended action and run the real install only
+first (the same release-age, malware, deprecation, and risk-hint gates as a real install, but it
+installs **nothing**), then surface each finding with a recommended action and run the real install only
 once you've cleared the risk, with the flags that match your choices. It never auto-proceeds past a
 `MAL-…` malware advisory.
 
@@ -335,7 +335,7 @@ The first run builds the sandbox image and the egress-proxy image. Run `sandbox 
 
 ## Try Without Installing
 
-You can bootstrap with `npx` if you just want to try it once:
+Bootstrap with `npx` to try it once:
 
 ```bash
 npx @jagreehal/sandbox-node@latest init
@@ -344,14 +344,14 @@ npx @jagreehal/sandbox-node@latest npm install
 ```
 
 Use `@latest` so `npx` does not reuse a stale cached version. For day-to-day use, the normal
-`sandbox ...` command is still the better workflow.
+`sandbox ...` command is the better workflow.
 
 ## CLI
 
 ```text
 sandbox [globals] <command> [args]
 
-Pass-through (recommended) — put `sandbox` in front of the command you already know:
+Pass-through (recommended): put `sandbox` in front of the command you already know:
   sandbox npm install | pnpm install | yarn | bun install    install deps (contained)
   sandbox npm ci                                      reproducible install (read-only tree)
   sandbox npm install <pkg> | pnpm add <pkg> | bun add <pkg>  add a dependency
@@ -433,8 +433,8 @@ globals (before the command):
                      from the lockfile: npm + pnpm + yarn), not just direct deps
   --fail-on-advisory  BLOCK when a version is flagged as malware in the OSV advisory DB
                      (the strict preset sets this)
-  --full-network     scarier escape hatch: run once with full network (no allowlist);
-                     with run/shell it also enables common dev ports
+  --full-network     escape hatch: run once with full network (no allowlist) for install
+                     and run. Add --dev to also publish the common dev ports.
   --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
                      Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
                      (still a default-deny allowlist, just a bigger one)
@@ -541,7 +541,7 @@ Control it with config or per-command flags:
 
 **Limits, so you don't over-trust them.** Hints are a signal, not a verdict: a package published
 31 days ago can be just as malicious as one published yesterday, so a quiet run doesn't mean
-"safe" — containment is the protection, hints are a heads-up. Each registry lookup is capped at 5
+"safe". Containment is the protection, hints are a heads-up. Each registry lookup is capped at 5
 seconds; if the registry is slow, rate-limiting you, or offline, the lookup is dropped with a
 warning and the install proceeds inside containment with no hints (it never hangs or fails on the
 hint step). Hints read the public npm metadata; a private registry that doesn't expose the same
@@ -549,7 +549,7 @@ fields (publish times, deprecation) will produce fewer or no hints for its packa
 
 ## Release-age gate (the cooldown)
 
-Risk hints *warn*. The release-age gate *blocks*. Set a threshold in days and `sandbox` refuses to
+Risk hints warn; the release-age gate blocks. Set a threshold in days and `sandbox` refuses to
 install any package version published more recently than that:
 
 ```bash
@@ -564,14 +564,14 @@ sandbox init --preset strict                 # the strict preset sets 7 days for
 **On by default for everyday use.** The schema default is `0`, but the presets turn it on: `balanced`
 (the default preset) and `agent` block versions younger than **3 days**, `strict` blocks **7 days**.
 `vibe` leaves it **off** (warn-only: the recent-publish hints still fire) so exploring or cloning a
-repo isn't blocked by a freshness gate. This matches the "minimum release age on by default" stance
-of tools like Aikido Safe Chain. A 3-day floor clears most legitimate installs while closing the
-window these worms detonate in.
+repo isn't blocked by a freshness gate. Aikido Safe Chain takes the same "minimum release age on by
+default" stance. A 3-day floor clears most legitimate installs while closing the window these worms
+detonate in.
 
-This is the single control the 2026-06-04 Shai-Hulud/"Miasma" incident named most effective. Worms
+The 2026-06-04 Shai-Hulud/"Miasma" incident named this the single most effective control. Worms
 of that class publish a malicious version and detonate within hours; the versions that hit were 5
 minutes and ~1 hour old. A cooldown refuses to *resolve* anything that fresh, so the install never
-pulls it — it falls back to the last version that has aged past the threshold. Example block:
+pulls it. It falls back to the last version that has aged past the threshold. Example block:
 
 ```text
 sandbox: ✖ blocked by the release-age gate (min 7 days)
@@ -592,16 +592,16 @@ How it behaves:
   versions an install/add/`npx` would directly pull. `--deep` reads every resolved version from the
   lockfile (npm, pnpm, and yarn) and gates the transitive tree too, which is where a carrier package
   usually hides. (pnpm 10.16+ also has a native `minimumReleaseAge`; it stacks.)
-- **Exempt your own scope.** The gate would otherwise block your own fresh publishes, so list them:
+- **Exempt your own scope.** The gate blocks your own fresh publishes too, so list them:
   `minReleaseAgeExclude: ["@myscope/*"]` in config, or `--allow-recent @myscope/*` (repeatable) per
-  run. Globs supported. This is what the incident response itself had to add.
+  run. Globs supported. The incident response added this itself.
 - **Fails open on a registry error** (warns and proceeds inside containment) so an npm outage can't
-  wedge every install — containment is still the backstop.
+  wedge every install; containment is still the backstop.
 - Skipped under `--json` / `--dry-run` (plan-only, no network).
 
 ## Known-malware check (the "already bad" axis)
 
-The release-age gate catches *too-new-to-trust*. A separate check catches *known-bad*: with
+The release-age gate catches versions too new to trust. A separate check catches known-bad versions: with
 `--fail-on-advisory` (or `failOnAdvisory: true`, set by the `strict` preset), `sandbox` queries the
 [OSV advisory database](https://osv.dev) for the exact version an install/add/`npx` would pull and
 **refuses to proceed if that version is flagged as malware** (an OSV `MAL-…` advisory).
@@ -611,17 +611,17 @@ sandbox --fail-on-advisory npm install      # block a known-malicious version
 sandbox init --preset strict                 # strict turns this on for you
 ```
 
-The two gates are complementary: a zero-day worm is too new for any advisory (the age gate stops
-it), while a republished known-bad version is caught here even if it has aged past the threshold.
+The two gates cover different cases: a zero-day worm is too new for any advisory (the age gate stops
+it), while a republished known-bad version is caught here even after it ages past the threshold.
 It's opt-in so the default install stays fast and free of an extra service dependency, and it
 **fails open** on a lookup error (warns, proceeds inside containment). Non-malware advisories
 (ordinary CVEs) are reported as warnings, not blocks.
 
 ### Retroactive sweep: `sandbox scan`
 
-The malware check above runs *at install* — it only knows what OSV has flagged at that moment. But
-most supply-chain compromises surface **later**: a version is published, looks clean, you install it,
-and *days afterwards* OSV files a `MAL-…` advisory for it. `sandbox scan` closes that time gap — it
+The malware check above runs at install, so it only knows what OSV has flagged at that moment. Most
+supply-chain compromises surface later: a version is published, looks clean, you install it,
+and days afterwards OSV files a `MAL-…` advisory for it. `sandbox scan` closes that time gap. It
 re-queries OSV for the versions in your **committed lockfile** and exits non-zero if any installed
 package is *now* flagged as malware.
 
@@ -631,18 +631,18 @@ sandbox --json scan           # machine-readable (for CI annotations)
 ```
 
 It needs no container (a read-only OSV lookup), so it's cheap to run on a schedule. Run it nightly,
-or fold it into the boundary gate with `sandbox verify --scan` so a green check means *boundary
-intact **and** no installed dependency is currently flagged as malware*. Like the install-time check
+or fold it into the boundary gate with `sandbox verify --scan` so a green check means the boundary is
+intact and no installed dependency is currently flagged as malware. Like the install-time check
 it fails open per package on a lookup error, and reports non-malware advisories as warnings.
 
 ### Your own blocklist (team advisories + malware feeds)
 
-OSV has publish lag, and the release-age gate only buys you a few days. When *you* already know a
-package is bad — an internal incident, a feed you trust, a maintainer you no longer do — you don't
-want to wait for OSV. Two offline sources let you block immediately, and a match from either **always
+OSV has publish lag, and the release-age gate buys you only a few days. When you already know a
+package is bad (an internal incident, a feed you trust, a maintainer you no longer do), you don't
+wait for OSV. Two offline sources let you block immediately, and a match from either **always
 blocks** (install, `preflight`, `scan`, `delta`, and `upgrade`), independent of `--fail-on-advisory`:
 
-- **Team advisories** — drop a committed `sandbox.advisories.json` in the repo root (a per-user global
+- **Team advisories**: drop a committed `sandbox.advisories.json` in the repo root (a per-user global
   one lives at `$XDG_CONFIG_HOME/sandbox-node/advisories.json`). No config needed:
 
   ```jsonc
@@ -656,7 +656,7 @@ blocks** (install, `preflight`, `scan`, `delta`, and `upgrade`), independent of 
 
   A name with no `versions` blocks every version; with `versions` it blocks only those exact cuts.
 
-- **Malware feeds** — list feed URLs in `install.malwareFeeds`, then run `sandbox feeds update` to
+- **Malware feeds**: list feed URLs in `install.malwareFeeds`, then run `sandbox feeds update` to
   fetch and cache them locally. The install-time check reads the cache, so it stays offline and fast.
   Feeds **augment** OSV (which has publish lag); they don't replace it.
 
@@ -670,16 +670,16 @@ blocks** (install, `preflight`, `scan`, `delta`, and `upgrade`), independent of 
   sandbox feeds list            # show configured + cached feeds
   ```
 
-  Feeds parse the common shapes — a JSON array of names; objects keyed by `name` **or `package_name`**
+  Feeds parse the common shapes: a JSON array of names; objects keyed by `name` **or `package_name`**
   (Aikido's field) with optional `version`/`reason`; a `{ "packages": [...] }` wrapper; or a
-  `name,version` CSV. A `*` version blocks every version. A dead feed URL is reported and skipped —
+  `name,version` CSV. A `*` version blocks every version. A dead feed URL is reported and skipped;
   it never aborts the rest.
 
 ### Catch committed secrets (`sandbox secrets`)
 
-The sandbox keeps your host credentials *out* of the install container, but it can't stop a key being
-committed into the repo itself — and the moment you `--env-from` a file or grant a path, that secret
-is in scope. `sandbox secrets` is the visibility half: a fast, offline scan for high-signal credential
+The sandbox keeps your host credentials out of the install container, but it can't stop a key being
+committed into the repo itself, and the moment you `--env-from` a file or grant a path, that secret
+is in scope. `sandbox secrets` scans for it: a fast, offline scan for high-signal credential
 shapes (cloud keys, provider tokens, private keys, database URLs with passwords).
 
 ```bash
@@ -689,7 +689,7 @@ sandbox verify --secrets      # fold it into the boundary gate
 ```
 
 It's deliberately high-precision (a provider's distinctive token shape, not every random string),
-skips `node_modules`/`.git`/build output/lockfiles/binaries, and **redacts** every match — it reports
+skips `node_modules`/`.git`/build output/lockfiles/binaries, and **redacts** every match; it reports
 the file and line, never the secret. Exiting non-zero makes it a drop-in CI tripwire. Rotate any real
 key it finds, move it to an env var, and add the file to `.gitignore`.
 
@@ -698,33 +698,33 @@ Vault/Vercel/Notion/Linear/…), with two precision tools borrowed from dedicate
 decode validation** (a candidate payment-card number must pass Luhn; a `eyJ…` blob must base64-decode
 to a real JWT header) drops matches that only *look* right, and an **entropy fallback** flags a
 high-randomness value assigned to a secret-ish name (`dbPassword`, `accessToken`) even when the
-provider isn't one we hardcode. A bare hex digest or a data-URI blob is *not* flagged — the fallback
+provider isn't one we hardcode. A bare hex digest or a data-URI blob is *not* flagged; the fallback
 needs both high entropy and a credential-shaped key, so it stays quiet on ordinary code.
 
 ### Canary honeytokens (catch exfiltration in the act)
 
-Default-deny egress *blocks* a credential from leaving; canaries tell you a thief *tried*. With
+Default-deny egress blocks a credential from leaving; canaries tell you a thief tried. With
 canaries on, the sandbox plants fake-but-realistic AWS/Stripe/Slack credentials in the install
-container's environment — exactly what a supply-chain script greps `process.env` for — each carrying a
-unique nonce. If that nonce ever shows up in the egress proxy's log, a value we planted (one with no
-legitimate use) left the box: unambiguous proof of theft, and the run fails hard.
+container's environment (exactly what a supply-chain script greps `process.env` for), each carrying a
+unique nonce. If that nonce shows up in the egress proxy's log, a value we planted (one with no
+legitimate use) left the box: proof of theft, and the run fails hard.
 
 ```bash
 sandbox --canaries npm install        # plant honeytokens for this install
 # on by default in the strict and agent presets
 ```
 
-Honest scope, because it matters: the proxy can see the request line of **plaintext HTTP** requests
-(URL + query) and the **host** of HTTPS `CONNECT`s — so a canary leaked in an HTTP request or used as a
+The scope: the proxy can see the request line of **plaintext HTTP** requests
+(URL + query) and the **host** of HTTPS `CONNECT`s, so a canary leaked in an HTTP request or used as a
 hostname is caught. A canary smuggled inside an *encrypted* HTTPS body to an allowlisted host is **not**
-visible to the canary — that case is the egress allowlist's job. Canaries are a tripwire on top of the
+visible to the canary; that case is the egress allowlist's job. Canaries are a tripwire on top of the
 boundary, not a replacement for it. The planted env-var names are ones no package manager reads, so
 turning them on can't break a real install.
 
 ## Watch it work (`sandbox demo`)
 
-`sandbox demo` runs four real supply-chain attacks against the live sandbox — in a throwaway project,
-never your repo — and shows each bouncing off a different control:
+`sandbox demo` runs four real supply-chain attacks against the live sandbox, in a throwaway project,
+never your repo, and shows each bouncing off a different control:
 
 ```text
 ▶ Plant a git hook (persistence)
@@ -739,18 +739,18 @@ demo: all 4 attack(s) contained — the sandbox held on every control
 ```
 
 No mocks: every attack runs through the same execute path a real install uses, and the command exits
-non-zero if anything isn't contained — so it doubles as a CI smoke test that the boundary still holds.
+non-zero if anything isn't contained, so it doubles as a CI smoke test that the boundary still holds.
 
 ## Signed receipts & tamper-evident audit log
 
 Two ways to turn "the boundary held" into evidence a third party can check, both built on `node:crypto`
 (no new dependencies):
 
-**Signed verify receipt** — `sandbox verify --sign` proves a *green* result and signs it with an
+**Signed verify receipt.** `sandbox verify --sign` proves a green result and signs it with an
 Ed25519 key the agent/CI never has to expose, so a later stage can confirm it without re-running the
 gate. It composes with `--scan`/`--secrets`: those gates run first, the receipt is emitted **only if
 every one passes**, and its `checks` field records exactly what was attested (`boundary`, and `scan`/
-`secrets` when requested) — so a receipt can never vouch for malware/secret cleanliness it didn't check.
+`secrets` when requested), so a receipt can never vouch for malware/secret cleanliness it didn't check.
 
 ```bash
 sandbox keygen > keys.pem                                    # private key → CI secret; note the fingerprint
@@ -758,10 +758,10 @@ SANDBOX_SIGNING_KEY=keys.pem sandbox verify --sign --scan --secrets > receipt.js
 sandbox verify-receipt receipt.json --fingerprint <pinned>   # rejects a valid sig from any other key
 ```
 
-Pinning the fingerprint is what makes it a gate rather than a rubber stamp — without it, anyone could
+Pinning the fingerprint makes it a gate rather than a rubber stamp; without it, anyone could
 mint a receipt with their own key.
 
-**Hash-chained audit log** — set `SANDBOX_AUDIT_LOG=<path>` and every run appends a JSONL entry whose
+**Hash-chained audit log.** Set `SANDBOX_AUDIT_LOG=<path>` and every run appends a JSONL entry whose
 hash commits to the one before it. `sandbox audit verify <log>` recomputes the chain; any entry
 altered or removed in place is caught:
 
@@ -770,8 +770,8 @@ SANDBOX_AUDIT_LOG=.sandbox/audit.jsonl sandbox npm install
 sandbox audit verify .sandbox/audit.jsonl
 ```
 
-The chain proves *internal* consistency (no past entry was rewritten); it doesn't stop someone
-discarding the whole file and starting over — for that, pin the latest hash out of band.
+The chain proves internal consistency (no past entry was rewritten); it doesn't stop someone
+discarding the whole file and starting over. For that, pin the latest hash out of band.
 
 ## Quick Start
 
@@ -820,15 +820,15 @@ sandbox test
 sandbox dev
 ```
 
-That rule keeps you out of the common trap: host Node trying to execute Linux-built `node_modules`.
+That rule keeps you out of a common trap: host Node trying to execute Linux-built `node_modules`.
 Your editor can still read types from `node_modules`. If you prefer the explicit expert surface,
 `sandbox run -- ...` maps to the same run model, but most users should stick to the pass-through form.
 
 ## Make it automatic: `sandbox path` (the human prefix-guard)
 
 Remembering to type `sandbox` on every install is the same problem the [agent hook](#enforce-the-prefix-with-a-hook)
-solves for AI agents — a boundary set once beats a rule you have to remember. `sandbox path` is
-the human-shell equivalent: it installs **shell functions** so a bare `npm install` can't run
+solves for AI agents: a boundary set once beats a rule you have to remember. `sandbox path` is
+the human-shell equivalent. It installs **shell functions** so a bare `npm install` can't run
 un-sandboxed out of habit.
 
 `sandbox setup` offers to wire this for you on the spot: answer yes to its prompt and it edits your
@@ -843,7 +843,7 @@ sandbox path print        # print the snippet instead (for `eval` or a manual pa
 ```
 
 Then open a new terminal (or `source ~/.zshrc`). After that, the **install vector** routes
-through the sandbox automatically, while everything else hits the real tool untouched:
+through the sandbox, while everything else hits the real tool untouched:
 
 | You type | What runs |
 | --- | --- |
@@ -852,18 +852,18 @@ through the sandbox automatically, while everything else hits the real tool unto
 | `npm run dev`, `npm test`, `npm publish`, `npm ls`, `npm audit`, `node app.js` | the real tool, on the host |
 
 It wraps the package-manager **front-ends only** (`npm`/`pnpm`/`yarn`/`bun`/`npx`/`bunx`), never
-`node` itself — running host Node is a separate, deliberate choice. The redirect prints a one-line
-notice to **stderr** (so piped output is untouched), and there are always two escape hatches:
+`node` itself. Running host Node is a separate, deliberate choice. The redirect prints a one-line
+notice to **stderr** (so piped output is untouched), and there are two escape hatches:
 
 ```bash
 command npm install        # bypass the wrapper for one call
 export SANDBOX_OFF=1        # disable the wrappers for the whole shell
 ```
 
-It's installed as a clearly-marked, versioned block in your rc file — read it, and `sandbox path
+It's installed as a clearly-marked, versioned block in your rc file. Read it, and `sandbox path
 uninstall` removes exactly that block and nothing else. This is a **convenience guardrail, not a
 containment boundary**: it depends on your interactive shell, so a script that calls `npm` directly,
-or a different shell, won't be wrapped — the real protection is still `sandbox` running the command
+or a different shell, won't be wrapped. The real protection is still `sandbox` running the command
 in a container. For unattended/CI enforcement, use [`sandbox verify` + `--frozen --fail-on-egress`](#continuous-integration);
 for agents, the [`--agent` hook](#enforce-the-prefix-with-a-hook).
 
@@ -899,11 +899,11 @@ sandbox --json npm install      # inspect the execution plan
 
 Granting a secret is opt-in and per-invocation: `--env <NAME>` forwards a single host env var by
 name (nothing else comes with it), and `--env-from <path>` injects the values from one env file.
-A private registry also needs its host allowed — `sandbox allow npm.pkg.github.com`.
+A private registry also needs its host allowed: `sandbox allow npm.pkg.github.com`.
 
 ## Monorepos (Turborepo, Nx, workspaces)
 
-Nothing special to configure — `sandbox` treats your root `package.json` scripts as the entry point,
+Nothing to configure: `sandbox` treats your root `package.json` scripts as the entry point,
 and those scripts are what call `turbo`/`nx`:
 
 ```bash
@@ -918,14 +918,14 @@ sandbox nx build web                   # turbo/nx resolve from node_modules/.bin
 Three things worth knowing:
 
 - **`sandbox build` runs the sandbox image build, not your `build` script.** In most Turbo/Nx repos
-  the root `build` script is `turbo build` / `nx build` — that name collides with a built-in. Use
-  **`sandbox script build`** (or `sandbox pnpm build`) to run the package.json script explicitly.
+  the root `build` script is `turbo build` / `nx build`, and that name collides with a built-in. Use
+  **`sandbox script build`** (or `sandbox pnpm build`) to run the package.json script directly.
 - **Remote caching needs an egress allow.** Turbo Remote Cache and Nx Cloud phone home, so allow their
   hosts once: `sandbox allow cloud.nx.app` (Nx Cloud) or your Vercel Remote Cache host. Local caches
   (`.turbo/`, `.nx/`) live in the mounted workspace and persist; the turbo/nx daemon is per-run.
 - **Shell wrappers cover the package managers, not the task runners.** `sandbox path install` routes
   bare `npm/pnpm/yarn/bun/npx/bunx` through the sandbox automatically; a bare `turbo`/`nx` typed on the
-  host is **not** auto-wrapped — run it as `sandbox turbo …` or via a script (`sandbox dev`/`sandbox script build`).
+  host is **not** auto-wrapped; run it as `sandbox turbo …` or via a script (`sandbox dev`/`sandbox script build`).
 
 ## Secrets, env vars, and `.env` files
 
@@ -945,7 +945,7 @@ You opt a secret in explicitly, per-run or per-project:
 | `grants.envFiles: ["path"]` (or `"path:FOO,BAR"`) | parse and inject these files (optionally key-filtered) on every run | the project |
 
 `--env NAME` reads the value from your host environment when the command runs; if the variable
-isn't set, nothing is injected. `--env-from` and `grants.envFiles` read a file on the host, parse it
+is unset, nothing is injected. `--env-from` and `grants.envFiles` read a file on the host, parse it
 (`KEY=VALUE`, optional `export ` prefix, quotes, `#` comments), and inject the parsed values. The
 file itself is never mounted; only its values become container env. When both define the same key, a
 named grant wins over an env-file value.
@@ -986,7 +986,7 @@ files ergonomic.
 
 ### A `.env` inside your project is different
 
-The methods above are about your *host* environment. A `.env` file that sits **in the project
+The methods above concern your *host* environment. A `.env` file that sits **in the project
 directory** is not an env grant: it's part of the tree `sandbox` mounts so the install can run, so
 dependency code in the container can read it like any other project file. `sandbox` does not hide
 it, the same way it doesn't hide `src/`.
@@ -1004,13 +1004,13 @@ don't widen it to a host the secret would be useful against.
 
 ## Continuous integration
 
-CI is where install-time containment pays off most: it's where untrusted dependency code runs
+CI is where install-time containment pays off most, because it runs untrusted dependency code
 unattended. The pattern is `--frozen` (reproducible, read-only install) plus `--fail-on-egress`
 (fail the build if install-time code tries to phone home).
 
-**What this means in practice:** if a malicious dependency runs during
-`sandbox --frozen --fail-on-egress npm install`, it should not be able to steal your CI secrets
-unless you explicitly grant them or widen the network. The install runs with an almost-empty
+**In practice:** if a malicious dependency runs during
+`sandbox --frozen --fail-on-egress npm install`, it can't steal your CI secrets
+unless you grant them or widen the network. The install runs with an almost-empty
 environment, default-deny egress, and no home-directory credentials mounted in.
 
 **GitHub Actions:**
@@ -1052,7 +1052,7 @@ disposable VM or ephemeral runner (see [Residual Risk](#residual-risk-and---froz
 A full `--deep` preflight re-checks the entire resolved tree on every run. In a pull request you
 usually only care about what the PR *introduces*. `sandbox delta` diffs the lockfile against the
 merge target and runs the release-age, malware, and deprecation gates over only the added/bumped
-versions — fast, and low-noise:
+versions, which is fast and low-noise:
 
 ```yaml
 # .github/workflows/deps-delta.yml — on: pull_request
@@ -1061,15 +1061,15 @@ versions — fast, and low-noise:
 - run: sandbox --min-release-age 7 --fail-on-advisory delta --base origin/${{ github.base_ref }}
 ```
 
-If the base lockfile can't be read it **fails safe** — every resolved package is treated as changed
+If the base lockfile can't be read it **fails safe**: every resolved package is treated as changed
 and gated. Pass `--base-lockfile <path>` instead of a git ref when you have the base file directly.
 
 ### Upgrade ranges safely — `sandbox upgrade`
 
 `sandbox npm update` only moves deps *within* their declared range; it never bumps `^4` to `^5`. To
 move the ranges themselves you reach for [`npm-check-updates`](https://github.com/raineorshine/npm-check-updates) (`ncu`). But ncu defaults to
-the absolute latest version of every dep, including ones published minutes ago. Your release-age gate
-exists to close exactly that window.
+the latest version of every dep, including ones published minutes ago. Your release-age gate
+closes that window.
 
 `sandbox upgrade` wraps ncu and drives it from your config. The `minReleaseAgeDays` you already set
 becomes ncu's `--cooldown`, so you only move to versions that have aged in. The proposed versions then
@@ -1098,7 +1098,7 @@ would otherwise block.
 
 ### Catch deps that go bad *after* merge — scheduled `sandbox scan`
 
-Install-time gates can't see the future; a nightly sweep can. `sandbox scan` re-checks the committed
+Install-time gates check the tree at install time; a nightly sweep catches deps that turn malicious later. `sandbox scan` re-checks the committed
 lockfile against OSV and fails if any installed version is now flagged as malware:
 
 ```yaml
@@ -1155,12 +1155,12 @@ and a badge advertises. The pieces reinforce each other: the committed config is
 truth, `sandbox verify` proves it in CI, and the badge links to that proof.
 
 **1. Commit the boundary.** Run `sandbox init` and commit `sandbox.config.json`. Now the boundary
-is one reviewed file — widening egress or adding a credential grant shows up in a PR diff, not in
+is one reviewed file: widening egress or adding a credential grant shows up in a PR diff, not in
 some teammate's global npm setup. Personal tweaks go in `sandbox.config.local.json` (auto-`.gitignore`d);
 a personal layer that loosens the committed boundary is [warned on every run](#layered-config-team-shared--personal-override).
 
 **2. Gate it in CI.** `sandbox verify` exits non-zero unless this repo commits a real boundary and
-no personal layer loosened it — so CI is where enforcement actually bites. A dev can skip the
+no personal layer loosened it, so CI is where enforcement bites. A dev can skip the
 sandbox locally, but nothing merges without passing through it:
 
 ```yaml
@@ -1180,7 +1180,7 @@ jobs:
 ```
 
 **3. Badge it.** `sandbox badge` prints a markdown snippet for your README. Bare gives the static
-provenance badge (claims "installs sandboxed" — a workflow fact, never "safe"). `--workflow sandbox.yml`
+provenance badge (claims "installs sandboxed", a workflow fact, never "safe"). `--workflow sandbox.yml`
 gives the **verified** badge: a GitHub Actions status badge that's green only when the job above
 passes, so it links to real evidence instead of asserting trust.
 
@@ -1191,7 +1191,7 @@ sandbox badge --workflow sandbox.yml   # CI-backed verified badge (--repo owner/
 
 ## Running A Dev Server
 
-The simplest path is the `vibe` (or `agent`) preset, which turns on the run network and
+Use the `vibe` (or `agent`) preset, which turns on the run network and
 auto-forwards the common framework dev-server ports (Vite `5173`/`4173`, Next/Remix `3000`,
 Astro `4321`, Angular `4200`, webpack `8080`):
 
@@ -1215,9 +1215,9 @@ The sandbox bind-mounts your project directory, so edits on the host reach the c
 copy step. Dev servers with hot module replacement run inside the sandbox: Vite, webpack HMR,
 Next.js Fast Refresh, and Bun's `--hot`.
 
-- **HMR (Vite / webpack / Rspack / Turbopack)** — edit `src/App.tsx` and the browser updates.
-- **File watchers (`--watch`, `nodemon`, `tsx watch`)** — edit a source file and the process restarts.
-- **Bun `--hot`** — works the same as npm/pnpm/yarn inside the container.
+- **HMR (Vite / webpack / Rspack / Turbopack)**: edit `src/App.tsx` and the browser updates.
+- **File watchers (`--watch`, `nodemon`, `tsx watch`)**: edit a source file and the process restarts.
+- **Bun `--hot`**: works the same as npm/pnpm/yarn inside the container.
 
 On **Linux**, inotify events cross the bind mount, so watchers fire with no extra config.
 `chokidar`, Vite, webpack, and Bun all watch via inotify by default.
@@ -1241,7 +1241,7 @@ If you need the broader “no allowlist for this invocation” escape hatch, use
 sandbox --full-network npm install
 ```
 
-Or wire it explicitly in `sandbox.config.json` — set `run.network` and either list exact
+Or wire it in `sandbox.config.json`: set `run.network` and either list exact
 ports or flip on the curated set:
 
 ```jsonc
@@ -1259,8 +1259,8 @@ ports or flip on the curated set:
 `sandbox-node` works in common Node monorepos.
 
 - If you run it from a package directory, it looks upward for `sandbox.config.json`.
-- If it does not find one, it falls back to common workspace markers such as `pnpm-workspace.yaml`, workspace `package.json`, and `turbo.json`.
-- **Root resolution is deterministic**, in this order: an explicit `--config <path>` wins; otherwise the nearest `sandbox.config.json` walking up from your cwd; otherwise the nearest ancestor holding any workspace marker; otherwise your cwd. A directory with several markers at once (say a root `package.json` `workspaces` field *and* a `pnpm-workspace.yaml`) is unambiguous — they all point at that same directory. If you ever want to override the choice, drop a `sandbox.config.json` at the root you mean, or pass `--config`.
+- If it finds none, it falls back to common workspace markers such as `pnpm-workspace.yaml`, workspace `package.json`, and `turbo.json`.
+- **Root resolution is deterministic**, in this order: an explicit `--config <path>` wins; otherwise the nearest `sandbox.config.json` walking up from your cwd; otherwise the nearest ancestor holding any workspace marker; otherwise your cwd. A directory with several markers at once (say a root `package.json` `workspaces` field *and* a `pnpm-workspace.yaml`) is unambiguous: they all point at that same directory. To override the choice, drop a `sandbox.config.json` at the root you mean, or pass `--config`.
 - `sandbox npm install`, `sandbox pnpm add`, and the expert `sandbox install` / `sandbox add` forms run at the workspace root.
 - `sandbox dev`, `sandbox test`, other script-fallback commands, and the expert `sandbox run -- ...` / `sandbox shell` forms run from the package directory you invoked them from.
 - `sandbox doctor` shows both the chosen workspace root and the package workdir.
@@ -1293,13 +1293,13 @@ const code = await execute(plan, createBackend('docker'));
 ```
 
 - `readConfig(cwd, configPath?) -> SandboxConfig`
-- `probeProject(cwd, config, opts?) -> ProjectFacts` — reads the host (pm, lockfile, persistence paths, env) once
+- `probeProject(cwd, config, opts?) -> ProjectFacts`: reads the host (pm, lockfile, persistence paths, env) once
 - `planInstall(config, facts, args?, opts?) -> RunPlan`
 - `planAdd(config, facts, pkgs, opts?) -> RunPlan`
 - `planRun(config, facts, argv, opts?) -> RunPlan`
-- `routePassthrough(argv) -> Route | undefined` — classify `npm install`/`pnpm add`/`npm run dev`/… into a containment model
+- `routePassthrough(argv) -> Route | undefined`: classify `npm install`/`pnpm add`/`npm run dev`/… into a containment model
 - `networkPolicy(mode) -> { isolate, hostGateway, publishPorts, useEgressProxy }`
-- `execute(plan, backend?, opts?) -> Promise<ExecuteResult>` — `{ code, deniedHosts, canaryHits, stdout?, stderr? }` (`stdout`/`stderr` present only with `{ capture: true }`)
+- `execute(plan, backend?, opts?) -> Promise<ExecuteResult>`: `{ code, deniedHosts, canaryHits, stdout?, stderr? }` (`stdout`/`stderr` present only with `{ capture: true }`)
 - `createBackend('docker' | 'podman') -> ContainerBackend`
 - `renderRunArgs(plan, override?) -> string[]`
 
@@ -1344,14 +1344,14 @@ await runCode("import { greet } from './lib.mjs'; console.log(greet('world'))", 
 Returns `{ stdout, stderr, exitCode, timedOut, durationMs, deniedHosts }`.
 
 **Stronger than `vm` or an in-process sandbox.** `vm.runInThisContext` and the old "sandbox"
-packages give you no security boundary. [Node's docs](https://nodejs.org/api/vm.html) say so. One
+packages give you no security boundary, as [Node's docs](https://nodejs.org/api/vm.html) state. One
 line escapes `runInThisContext`: `this.constructor.constructor('return process')().exit()`. A
 `while (true) {}` defeats a `vm` timeout, because the loop never yields the event loop. `runCode`
 shuts both down. Your code runs in a throwaway container with no host credentials and no network by
 default, and `timeout(1)` enforces the deadline from the container's init process, the parent of
 your code. A loop that never yields cannot pause or outrun it.
 
-**The boundary, stated plainly.** This is container isolation. The kernel is shared, so a kernel
+**The boundary.** This is container isolation. The kernel is shared, so a kernel
 exploit can still escape. `timeout(1)` enforces the deadline inside the container, not from a host
 supervisor, and no second host-side cap backs it up. That holds for untrusted JavaScript and
 TypeScript. It will not stop a container escape. To run hostile or multi-tenant workloads, put a
@@ -1380,12 +1380,12 @@ sandbox init --preset balanced --force   # overwrite an existing config
 | `trusted` | full | basic hints only | full | — | SSH agent + project Claude config |
 
 Presets are also exported from the library (`PRESETS`, `presetConfig(name)`), so other tools
-can reuse them. Start with `balanced` (or `strict`); pick `vibe`/`agent` when you need dev
-servers reachable while keeping host credentials out; reach for `trusted` only when you also need
+can reuse them. Start with `balanced` (or `strict`). Pick `vibe`/`agent` when you need dev
+servers reachable while keeping host credentials out, and reach for `trusted` only when you also need
 outbound network and the SSH agent during a run.
 
-Presets are deltas from the schema defaults — `balanced` is literally `{}`, so a new config
-field is added once (to the schema) and every preset inherits its default. The schema is the
+Presets are deltas from the schema defaults: `balanced` is `{}`, so you add a new config
+field once (to the schema) and every preset inherits its default. The schema is the
 single source.
 
 ## Manifest
@@ -1447,7 +1447,7 @@ For programmatic use, the `SandboxConfig` TypeScript type is exported from the p
 
 ### Layered config: team-shared + personal override
 
-Config merges from three layers, lowest precedence first — so a team commits one boundary and
+Config merges from three layers, lowest precedence first, so a team commits one boundary and
 individuals tweak ergonomics without editing the shared file:
 
 | Layer | File | Scope | Commit it? |
@@ -1458,16 +1458,16 @@ individuals tweak ergonomics without editing the shared file:
 
 Layers deep-merge (objects merge; arrays and scalars replace) and validate **once**, so a typo in
 any layer still fails loudly. Precedence is "most specific wins" for ergonomic fields (`image`,
-ports, dev ports). For **boundary** fields it's asymmetric — any layer may *tighten*, but a personal
+ports, dev ports). For **boundary** fields it's asymmetric: any layer may *tighten*, but a personal
 layer that *loosens* past the committed config (widening network, adding egress hosts or credential
-grants, disabling a gate, replacing the Dockerfile) is **warned loudly** on every run:
+grants, disabling a gate, replacing the Dockerfile) is warned on every run:
 
 ```text
 sandbox: ⚠ run.network widened to 'on' (team config: 'none')
 sandbox: ⚠ grants.ssh-agent enabled beyond team config
 ```
 
-The run still proceeds — *tighten freely, loosen loudly* — but the change is never silent, and the
+The run still proceeds (*tighten freely, loosen loudly*), but the change is never silent, and the
 personal file can't be committed to quietly widen the boundary for everyone else.
 
 ### Customizing the image
@@ -1475,18 +1475,18 @@ personal file can't be committed to quietly widen the boundary for everyone else
 `build` lets a project pin the base or add tooling **without** touching the security layers
 (metadata guard, dropped capabilities, corepack) the bundled Dockerfile bakes in:
 
-- `nodeVersion` / `baseImage` — swap what the image is built `FROM` (passed as a build-arg).
-- `extraPackages` / `extraSteps` — layered on top of the *already-built* security base, so they
+- `nodeVersion` / `baseImage`: swap what the image is built `FROM` (passed as a build-arg).
+- `extraPackages` / `extraSteps`: layered on top of the *already-built* security base, so they
   can only **add** to the boundary, never remove it. `COPY`/`ADD` paths in `extraSteps` resolve
   against your **project root** (the build context), so they can pull files from the repo into the
-  image — e.g. `"extraSteps": ["COPY ./certs/ca.pem /usr/local/share/ca-certificates/ca.crt"]`.
-- `customDockerfileUnsafe` — the escape hatch that replaces the bundled image entirely. The sandbox
+  image, e.g. `"extraSteps": ["COPY ./certs/ca.pem /usr/local/share/ca-certificates/ca.crt"]`.
+- `customDockerfileUnsafe`: the escape hatch that replaces the bundled image entirely. The sandbox
   can no longer verify its own boundary, so it warns on every build and flags any security layer the
   file dropped. Prefer the additive knobs above. A relative path is resolved against the **config file
   that declared it** (so a path in a user-global or `--config` file still means what it says).
 
 **Rebuilds.** The resolved spec is stamped on the image as a label, so changing any `build.*` field
-(or the text of a `customDockerfileUnsafe`) **auto-rebuilds** on the next run — the runtime can never
+(or the text of a `customDockerfileUnsafe`) **auto-rebuilds** on the next run, and the runtime can never
 quietly execute a boundary that differs from your config. The fingerprint tracks *build instructions*,
 not the contents of files those instructions reference, so after editing a file pulled in by `COPY`/`ADD`
 run `sandbox build` to force a rebuild.
@@ -1509,7 +1509,7 @@ If you mount a credential file into the container, any code in the container can
 
 Use `"ssh-agent": true` for Git over SSH. The container can ask the agent to sign. It cannot read the private key. Use `"project"` for Claude state if you want repo-scoped credentials instead of your whole `~/.claude`.
 
-One caveat with forwarding: while the key bytes stay out, code in the container can ask the agent to sign *arbitrary* data for as long as the socket is exposed — a malicious dependency could get a signed commit or an SSH auth to a server you can reach. That's still far better than mounting the key file (the key can't be exfiltrated), but for untrusted installs prefer a dedicated deploy key or a separate agent scoped to this work, not your everyday personal agent.
+One caveat with forwarding: while the key bytes stay out, code in the container can ask the agent to sign *arbitrary* data for as long as the socket is exposed; a malicious dependency could get a signed commit or an SSH auth to a server you can reach. That's still far better than mounting the key file (the key can't be exfiltrated), but for untrusted installs prefer a dedicated deploy key or a separate agent scoped to this work, not your everyday personal agent.
 
 ## Network Control
 
@@ -1520,7 +1520,7 @@ One caveat with forwarding: while the key bytes stay out, code in the container 
 | Host services | `"on"` | use `host.docker.internal` |
 | External services | `"on"` | normal DNS and egress work |
 
-In `allowlist` mode the container joins an `--internal` network with no route off-box. The proxy joins that network and a normal egress network. The container can only leave through the proxy, and the proxy only forwards to hosts in `egress.allow`. Even malware that ignores `HTTP_PROXY` is contained — there is no other route out.
+In `allowlist` mode the container joins an `--internal` network with no route off-box. The proxy joins that network and a normal egress network. The container can only leave through the proxy, and the proxy only forwards to hosts in `egress.allow`. Even malware that ignores `HTTP_PROXY` is contained; there is no other route out.
 
 ```mermaid
 flowchart LR
@@ -1566,13 +1566,13 @@ registry from your `.npmrc`, and `github.com`/`codeload.github.com` when a depen
 spec. So first run usually just works; add anything else (like `nodejs.org` for native modules)
 with `sandbox allow <host>`.
 
-If an install fails to reach something under `allowlist`, that's the control working. `sandbox`
+If an install fails to reach something under `allowlist`, the control is working. `sandbox`
 prints the blocked host, suggests `sandbox allow <host>`, and shows the config preview it would add.
 
 ## Logging & the egress tripwire
 
-The most useful signal this tool produces is **a dependency trying to reach a host you didn't
-allow** — a likely exfiltration attempt. In `allowlist` mode the proxy records every refusal,
+The signal this tool produces is **a dependency trying to reach a host you didn't
+allow**, a likely exfiltration attempt. In `allowlist` mode the proxy records every refusal,
 and `sandbox` surfaces them after the run:
 
 ```text
@@ -1586,7 +1586,7 @@ sandbox: Config preview:
 }
 ```
 
-- **`--fail-on-egress`** turns that into a hard failure (exit non-zero) — a CI tripwire that
+- **`--fail-on-egress`** turns that into a hard failure (exit non-zero), a CI tripwire that
   fails the build if install-time code phones home.
 - Logs go to **stderr as human lines** by default. Set **`SANDBOX_LOG=json`** for NDJSON
   (one structured event per line, for CI/log pipelines), and **`SANDBOX_LOG_LEVEL`**
@@ -1605,9 +1605,8 @@ exit code (Slack, webhook, etc.) are left to your CI step reading the NDJSON.
 **Event schema (for programmatic consumers):** every NDJSON line is
 `{ "level": "debug"|"info"|"warn"|"error", "msg": string, ...fields }`. Fields are event-specific
 and flat (arrays are emitted as JSON arrays). The one event worth matching on for CI is the egress
-block: `{"level":"warn","msg":"blocked N egress attempt(s) to non-allowlisted host(s)","hosts":[…]}`
-— key off the `hosts` array, not the prose `msg`. There is no timestamp field; if your pipeline
-needs one, stamp it on receipt. The shape is stable; new fields may be added, so ignore unknown keys.
+block: `{"level":"warn","msg":"blocked N egress attempt(s) to non-allowlisted host(s)","hosts":[…]}`. Key off the `hosts` array, not the prose `msg`. There is no timestamp field; if your pipeline
+needs one, stamp it on receipt. The shape is stable, though new fields may be added, so ignore unknown keys.
 
 ## Install Boundary
 
@@ -1629,7 +1628,7 @@ On Linux the container runs as root (`HOME=/root`), so files it writes to the bi
 In the default model a malicious dependency can still edit a source file, because the project
 root stays writable (package managers need it). You will see that change in your diff. The
 default still blocks the auto-executing persistence paths, ambient credential access, and
-non-allowlisted egress — it just does not promise full source-tree immutability.
+non-allowlisted egress; it does not promise full source-tree immutability.
 
 **`--frozen` closes that residual where the package manager allows it.** It runs a
 reproducible install that writes only `node_modules`:
@@ -1647,8 +1646,8 @@ the right default for CI and fresh-clone installs.
 
 **One more boundary worth naming: the container runtime itself.** `sandbox` relies on Docker
 for isolation and doesn't add a custom seccomp or AppArmor profile beyond the runtime's defaults, so
-a kernel or container-runtime CVE is out of its reach. For the highest-risk case — CI that builds
-untrusted pull requests — run `sandbox` inside a disposable VM (or an ephemeral CI runner), so a
+a kernel or container-runtime CVE is out of its reach. For the highest-risk case, CI that builds
+untrusted pull requests, run `sandbox` inside a disposable VM (or an ephemeral CI runner), so a
 runtime escape lands in a throwaway guest rather than on a host with standing credentials.
 
 ## DX Trade-Offs
@@ -1668,13 +1667,13 @@ npm run typecheck      # type-check the project
 npm run build          # build the dist for npm packaging
 ```
 
-For testing the CLI against your own repos during development, `npm run dev -- --dry-run npm install` is the fast iteration loop — it previews the plan without touching a container.
+For testing the CLI against your own repos during development, `npm run dev -- --dry-run npm install` is the fast iteration loop; it previews the plan without touching a container.
 
 ## How This Differs From Other Tools
 
 This package targets one problem: Node install-time containment with low workflow cost.
 
-Dev containers and DevPod give you full containerized workspaces, but a devcontainer does *not* make `npm install` safe: inside it, the install still runs with whatever the container can reach. `sandbox` fills the install-time gap devcontainers leave open. When you want a persistent environment, it can [generate the devcontainer for you](#isolating-the-agent-itself-two-lifecycles). That's composition, not competition. Docker Sandboxes and `@anthropic-ai/sandbox-runtime` push harder on isolation. They also ask more from the environment or the workflow.
+Dev containers and DevPod give you full containerized workspaces, but a devcontainer does *not* make `npm install` safe: inside it, the install still runs with whatever the container can reach. `sandbox` fills the install-time gap devcontainers leave open. When you want a persistent environment, it can [generate the devcontainer for you](#isolating-the-agent-itself-two-lifecycles), which composes the two. Docker Sandboxes and `@anthropic-ai/sandbox-runtime` push harder on isolation, and they ask more from the environment or the workflow.
 
 This tool keeps the scope tight:
 

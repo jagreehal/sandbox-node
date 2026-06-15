@@ -17,7 +17,7 @@ import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontaine
 import { renderPlanSummary } from './dryrun.js';
 import { routePassthrough, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
-import { execute } from './index.js';
+import { execute } from './execute.js';
 import { runInit } from './init.js';
 import { log } from './log.js';
 import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
@@ -327,7 +327,7 @@ function applyOneOffModes(config: SandboxConfig, globals: Globals): SandboxConfi
     if (extra.length) cfg = { ...cfg, egress: { ...cfg.egress, allow: [...cfg.egress.allow, ...extra] } };
   }
   if (!globals.dev && !globals.fullNetwork) return cfg;
-  const run = { ...cfg.run, network: 'on' as const, devPorts: true };
+  const run = { ...cfg.run, network: 'on' as const, devPorts: globals.dev ? true : cfg.run.devPorts };
   if (!globals.fullNetwork) return { ...cfg, run };
   return { ...cfg, install: { ...cfg.install, network: 'on' }, run };
 }
@@ -1229,6 +1229,10 @@ async function main(): Promise<number> {
     const loaded = loadConfig(context.rootDir, context.configPath);
     for (const warning of loaded.warnings) log.warn(warning);
     const tag = globals.image ?? loaded.config.image;
+    if (globals.json) {
+      console.log(JSON.stringify(resolveBuildSpec(loaded.config, tag, context.rootDir), null, 2));
+      return 0;
+    }
     return backend.buildImages(resolveBuildSpec(loaded.config, tag, context.rootDir));
   }
 

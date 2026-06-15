@@ -1,9 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const ROOT = process.cwd();
+const require = createRequire(import.meta.url);
 function resolveCli(): string {
   const esm = path.join(ROOT, 'dist', 'cli.mjs');
   return existsSync(esm) ? esm : path.join(ROOT, 'dist', 'cli.js');
@@ -11,6 +13,15 @@ function resolveCli(): string {
 
 export const CLI = resolveCli();
 export const PACKAGE_ROOT = ROOT;
+function resolveTsxCli(): string {
+  const packageJsonPath = require.resolve('tsx/package.json', { paths: [ROOT] });
+  const packageDir = path.dirname(packageJsonPath);
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { bin?: string | Record<string, string> };
+  const bin = typeof packageJson.bin === 'string' ? packageJson.bin : packageJson.bin?.tsx;
+  if (!bin) throw new Error('Could not resolve tsx bin entry');
+  return path.join(packageDir, bin);
+}
+const TSX = resolveTsxCli();
 
 export interface CliResult {
   code: number;
@@ -22,6 +33,22 @@ export interface CliResult {
 export function runCli(cwd: string, args: string[], env: Record<string, string> = {}): Promise<CliResult> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [resolveCli(), ...args], {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+  });
+}
+
+/** Run a repo-local TypeScript script with tsx while targeting a fixture cwd. */
+export function runRepoScript(cwd: string, scriptRel: string, env: Record<string, string> = {}): Promise<CliResult> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [TSX, path.join(PACKAGE_ROOT, scriptRel)], {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],

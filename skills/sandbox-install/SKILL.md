@@ -10,9 +10,8 @@ default-deny, lifecycle scripts contained) and ships a supply-chain preflight. T
 is the **interactive front-end**: the CLI is pure flags, and you (the agent) are the
 human-in-the-loop. You drive the flags; the user makes the risk calls.
 
-The whole point: the `preflight` command runs the gates and reports findings **without
-installing anything**. So the review pass is always safe to run first — real
-review-before-install — and you only run the real install once the user has cleared the risk.
+The `preflight` command runs the gates and reports findings **without installing anything**.
+Run the review pass first, then run the real install once the user has cleared the risk.
 
 ## Workflow
 
@@ -27,15 +26,14 @@ review-before-install — and you only run the real install once the user has cl
 
    If `package.json` pins a `"packageManager"` (pnpm/yarn) other than the image's baked default,
    the first install bakes that version into the image, so expect a one-time image build before the
-   install runs. It's automatic — no config needed.
+   install runs. This happens automatically; no config needed.
 
    For a project with native modules (node-gyp, Prisma, Playwright, Cypress, Electron) that download
    binaries during `postinstall`, the interactive `sandbox init` picker can pre-allow the
    `build-tools` egress bundle so those installs don't block on the first run (see step 4).
 
-2. **Review pass — check WITHOUT installing.** Use the `preflight` command: it runs the
-   gates over what the command would pull and **never installs**, so this is always safe to
-   run first.
+2. **Review pass: check WITHOUT installing.** Use the `preflight` command: it runs the
+   gates over what the command would pull and **never installs**, so run it first.
 
    ```
    sandbox --json --fail-on-risk --fail-on-advisory --min-release-age 7 preflight <pm> install [pkgs]
@@ -63,8 +61,8 @@ review-before-install — and you only run the real install once the user has cl
    user decide before step 4. There is no dedicated "block on any advisory" flag — say so
    plainly rather than implying one exists.
 
-4. **Install with the user's choices.** The review pass installed nothing, so this is the
-   step that actually runs. Apply only the overrides they approved:
+4. **Install with the user's choices.** The review pass installed nothing; this step runs.
+   Apply only the overrides they approved:
    - Clean pass (exit 0) → `sandbox <pm> install [pkgs]`
    - Approve one fresh package, keep the gate for the rest → `sandbox --allow-recent left-pad <pm> install`
    - Accept all fresh releases this once → `sandbox --min-release-age 0 <pm> install`
@@ -72,11 +70,11 @@ review-before-install — and you only run the real install once the user has cl
      (`sandbox <pm> add <pkg>@<version>`)
    - Abort → stop; nothing was installed.
 
-   **If the install itself blocks on egress** (not a preflight finding — a `postinstall` tried to
+   **If the install itself blocks on egress** (not a preflight finding; a `postinstall` tried to
    reach a host that isn't on the allowlist), the proxy reports the blocked host. When it's a known
    **build host** (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron
-   binaries), re-run with `--allow-build-hosts` — it adds the curated native-build hosts for that run
-   and **stays a default-deny allowlist** (not full network). Prefer the narrowest fix: allow just
+   binaries), re-run with `--allow-build-hosts`: it adds the curated native-build hosts for that run
+   and **stays a default-deny allowlist** (not full network). Prefer the narrowest fix: allow
    the exact host with `sandbox allow <host>` when only one is needed.
 
 5. **Report** exactly what ran, which overrides were applied and why, and what installed.

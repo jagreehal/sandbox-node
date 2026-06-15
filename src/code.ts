@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createBackend, type ContainerBackend } from './backend.js';
 import { SandboxConfigSchema, type NetworkMode } from './config.js';
-import { execute } from './index.js';
+import { execute } from './execute.js';
 import { planRun } from './plan.js';
 import { probeProject } from './project.js';
 

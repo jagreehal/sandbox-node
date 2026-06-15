@@ -314,13 +314,13 @@ describe('cli (golden, no docker)', () => {
     expect(dev.ports).toContain('5173:5173');
   });
 
-  it('--full-network opens install egress and run dev ports for one run', async () => {
+  it('--full-network opens install and run networking for one run without enabling dev-port publishing', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' });
     const install = JSON.parse((await runCli(dir, ['--json', '--full-network', 'npm', 'install'])).stdout);
     expect(install.network).toBe('on');
     const dev = JSON.parse((await runCli(dir, ['--json', '--full-network', 'npm', 'run', 'dev'])).stdout);
     expect(dev.network).toBe('on');
-    expect(dev.ports).toContain('5173:5173');
+    expect(dev.ports).toEqual([]);
   });
 
   it('--allow-build-hosts widens egress to the curated native-build hosts (still default-deny otherwise)', async () => {
@@ -566,8 +566,7 @@ describe('cli (golden, no docker)', () => {
     const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
     expect(plan.argv).toEqual(['npm', 'audit', 'signatures', '--json']);
     expect(plan.network).toBe('allowlist');
-    expect(plan.mounts).toContainEqual({ type: 'bind', source: '<cwd>/package.json', target: '/workspace/package.json', readonly: true });
-    expect(plan.mounts).toContainEqual({ type: 'volume', target: '/workspace/.github', readonly: true });
+    expect(plan.mounts).toContainEqual({ type: 'bind', source: '<cwd>', target: '/workspace', readonly: true });
   });
 
   it('pass-through: `pnpm audit signatures` honours the named pm and stays read-only to the manifest', async () => {
@@ -577,7 +576,7 @@ describe('cli (golden, no docker)', () => {
     const plan = JSON.parse(stdout);
     expect(plan.argv).toEqual(['corepack', 'pnpm', 'audit', 'signatures']);
     expect(plan.network).toBe('allowlist');
-    expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toMatchObject({ readonly: true });
+    expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace')).toMatchObject({ readonly: true });
     expect(plan.interactive).toBe(false);
   });
 
@@ -600,7 +599,19 @@ describe('cli (golden, no docker)', () => {
     expect(first.stdout).toContain('sandbox: wrote sandbox.config.json using the strict preset');
     expect(first.stdout).toContain('sandbox npm install');
     const cfg = JSON.parse(readFileSync(path.join(dir, 'sandbox.config.json'), 'utf8'));
-    expect(cfg.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, failOnDeprecated: true });
+    expect(cfg.install).toEqual({
+      network: 'allowlist',
+      frozen: true,
+      riskHints: 'thorough',
+      failOnRisk: false,
+      minReleaseAgeDays: 7,
+      minReleaseAgeExclude: [],
+      failOnAdvisory: true,
+      malwareFeeds: [],
+      failOnDeprecated: true,
+      cache: true,
+      canaries: true,
+    });
     expect(cfg.run.network).toBe('none');
 
     const clobber = await runCli(dir, ['init', '--preset', 'trusted']);
@@ -655,7 +666,7 @@ describe('cli (golden, no docker)', () => {
   it('doctor reports a missing backend clearly', async () => {
     const { code, stdout } = await runCli(fixture({}), ['doctor'], { PATH: '' });
     expect(code).toBe(1);
-    expect(stdout).toContain('[ok] config:');
+    expect(stdout).toContain('[info] config:');
     expect(stdout).toContain('[info] package manager:');
     expect(stdout).toContain('[fail] backend:');
     expect(stdout).toContain('fix:');
