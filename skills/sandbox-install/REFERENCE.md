@@ -20,8 +20,8 @@ collides with a sandbox command such as `build`, use `sandbox script build`.
 sandbox [gate flags] preflight [<pm> <cmd> …]
 ```
 
-Runs the same gates as a real install but **never installs** — it reports findings and exits
-non-zero exactly when the matching install would have been blocked. The argument after
+Runs the same gates as a real install but **never installs**: it reports findings and exits
+non-zero when the matching install would have been blocked. The argument after
 `preflight` is routed like any pass-through command; omit it to check the current install
 surface (lockfile / direct deps).
 
@@ -46,9 +46,9 @@ Exit codes: **0** = no blocking findings (safe to install); **1** = would block.
 }
 ```
 
-`suggestions[]` is the closed "pin older" gap: for each release-age violation it names the
-newest **stable, non-deprecated, already-aged-in** version and gives a ready-to-run `pin`
-command. Empty when no older version qualifies (then recommend waiting or `--allow-recent`).
+For each release-age violation, `suggestions[]` names the newest **stable, non-deprecated,
+already-aged-in** version and gives a ready-to-run `pin` command. Empty when no older
+version qualifies (then recommend waiting or `--allow-recent`).
 
 ### Annotated `--json` example
 
@@ -101,28 +101,28 @@ Real preflight from `sandbox --json --fail-on-risk --fail-on-advisory --min-rele
 The preflight resolves the registry once and runs every active gate over that result. It
 runs *before* the install and decides the exit code. Blocking precedence:
 
-1. **Release-age gate** — blocks a version published fewer than N days ago. The strongest
+1. **Release-age gate:** blocks a version published fewer than N days ago. The strongest
    control against publish-and-detonate worms.
-2. **Known-malware advisory** — OSV advisory with a `MAL-…` id; blocks under
+2. **Known-malware advisory:** OSV advisory with a `MAL-…` id; blocks under
    `--fail-on-advisory`. **Non-malware advisories are logged as warnings only and never
-   block** — there is no flag to block on them.
-3. **Deprecated version** — a version the maintainer marked deprecated. **Blocks by default**
+   block**; no flag blocks on them.
+3. **Deprecated version:** a version the maintainer marked deprecated. **Blocks by default**
    (deprecated = abandoned = supply-chain risk); `--allow-deprecated` downgrades it to a
    warning. Rides on the risk resolution, so `--risk off` also disables it.
-4. **Risk hints** — advisory by default; blocks only under `--fail-on-risk`.
+4. **Risk hints:** advisory by default; blocks only under `--fail-on-risk`.
 
 Precedence when several fire: release-age → malware → deprecated → risk hints.
 
 **Monorepos:** the direct-deps gates (deprecated, malware, risk hints) check the **union of every
 workspace package's deps** (npm/yarn/bun `workspaces` or `pnpm-workspace.yaml`), not just the root
-manifest — because `install` at the root pulls them all. Local `workspace:`/`file:`/`link:` deps are
+manifest, because `install` at the root pulls them all. Local `workspace:`/`file:`/`link:` deps are
 skipped (nothing to fetch).
 
 **`--deep`** extends the **blocking** gates — release-age, **deprecated**, and **malware** (with
 `--fail-on-advisory`) — to the whole transitive tree from the lockfile, at the **exact locked
 versions** (so it catches the version actually installed, not the latest the range resolves to). It
 reads one packument per package (age + deprecation come from the same fetch) plus OSV queries for
-malware. Risk *hints* (bin/script/recent) stay direct-only — they're advisory, not worth tree-wide.
+malware. Risk *hints* (bin/script/recent) stay direct-only; they're advisory, not worth tree-wide.
 
 Everything **fails open**: a registry/OSV lookup error proceeds inside containment rather
 than wedging the install.
@@ -158,8 +158,8 @@ commands hit the real tool untouched.
   manage it; `--shell zsh|bash|fish|pwsh` targets a specific shell.
 - `sandbox setup` offers to wire it interactively (one keypress).
 - Escape hatches: `command npm …` (one call) or `SANDBOX_OFF=1` (whole shell).
-- This is a **convenience guardrail, not a containment boundary** — it depends on the interactive
-  shell. The real protection is still `sandbox` running the install in a container; for CI use
+- This is a **convenience guardrail, not a containment boundary**: it depends on the interactive
+  shell. The protection is `sandbox` running the install in a container; for CI use
   `sandbox verify` + `--frozen --fail-on-egress`, for agents the `--agent` hook.
 
 ## Flags this skill uses
@@ -214,4 +214,4 @@ Even on "proceed," the install runs jailed: persistence paths (`.git`, `.github`
 `.claude`, …) and `package.json` are read-only, no host creds are mounted, and egress is
 default-deny (registry-only allowlist). Under the `strict`/`agent` presets, canary honeytokens
 also ride along, so an exfiltration attempt is caught in the act. The prompt is a "spend the
-risk?" decision, not the only thing between the user and a bad package — containment is the backstop.
+risk?" decision; containment is the backstop.
