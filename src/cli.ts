@@ -20,7 +20,7 @@ import { runDoctor } from './doctor.js';
 import { execute } from './index.js';
 import { runInit } from './init.js';
 import { log } from './log.js';
-import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
+import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
 import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
 import { probeProject, type ProjectFacts } from './project.js';
 import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
@@ -38,6 +38,8 @@ import { runSetup } from './setup.js';
 import { makeCanary } from './canary.js';
 import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
+import { buildHostSuffixes } from './hosts.js';
+import { disabledByEnv, refreshUpdateCache, scheduleUpdateCheck, selfVersion, updateBanner } from './update-check.js';
 import type { ContainerBackend } from './backend.js';
 
 interface Globals {
@@ -68,6 +70,10 @@ interface Globals {
   failOnDeprecated?: boolean;
   /** Plant canary honeytokens and watch egress for them (overrides install.canaries). */
   canaries?: boolean;
+  /** Suppress the "new version available" notice for this run (--no-update-check). */
+  noUpdateCheck: boolean;
+  /** Widen egress to the curated native-build/release hosts for this run (--allow-build-hosts). */
+  allowBuildHosts: boolean;
 }
 
 const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
@@ -77,6 +83,9 @@ const HELP = `sandbox — put it in front of the npm/pnpm/yarn/bun command you a
 Usage: sandbox [globals] <command> [args]
 
 Just add "sandbox" in front — same commands, fewer secrets exposed:
+  sandbox dev                 auto-detect PM, run dev/start/serve with full network + dev ports
+  sandbox test                auto-detect PM, run a package.json script natively
+  sandbox script build        run a specific package.json script, even if it collides with a sandbox command
   sandbox setup --vibe         one-button setup for vibe/dev work
   sandbox npm install          install deps in the sandbox (lifecycle scripts contained)
   sandbox pnpm add zod         add a dependency (saved exact by default)
@@ -95,6 +104,11 @@ Sandbox commands:
                        or non-interactive with --preset strict|balanced|vibe|agent|trusted [--force])
   setup [--preset N]   one-button onboarding: write config if needed, check backend,
                        build images if needed, then print the next commands
+  dev                  auto-detect the package manager and run the first of
+                       dev > start > serve from package.json. Passes through extra args.
+  script <name>        run the named package.json script with native PM syntax.
+                       Use this when the script name collides with a sandbox command
+                       like build/scan/doctor/demo.
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
   path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
                        npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically —
@@ -202,8 +216,12 @@ Globals (before the command):
                        are blocked). Rides on risk hints, so --risk off also disables it.
   --full-network       scarier escape hatch: run this once with full network (no egress
                        allowlist); with run/shell it also enables common dev ports
+  --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
+                       Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
   --dry-run            preview what would be mounted, allowed, and run — then stop (human-readable)
   --json               print the resolved execution plan as JSON instead of running it
+  --no-update-check    skip the once-a-day "new version available" check for this run
+                       (also off via NO_UPDATE_NOTIFIER=1, CI=1, or updateCheck:false in config)
 
 Logging: human lines on stderr by default; set SANDBOX_LOG=json for NDJSON,
 SANDBOX_LOG_LEVEL=debug|info|warn|error to filter.
@@ -225,6 +243,8 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     allowRecent: [],
     deep: false,
     interactive: false,
+    noUpdateCheck: false,
+    allowBuildHosts: false,
   };
   let i = 0;
   for (; i < argv.length; i++) {
@@ -257,6 +277,8 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     else if (a === '--allow-deprecated') globals.failOnDeprecated = false;
     else if (a === '--canaries') globals.canaries = true;
     else if (a === '--no-canaries') globals.canaries = false;
+    else if (a === '--no-update-check') globals.noUpdateCheck = true;
+    else if (a === '--allow-build-hosts') globals.allowBuildHosts = true;
     else break;
   }
   return { globals, cmd: argv[i], args: argv.slice(i + 1) };
@@ -293,15 +315,21 @@ function redactPlanEnv(plan: RunPlan): RunPlan {
 }
 
 /**
- * One-off invocation modes:
+ * One-off invocation modes, applied to the config for this run only:
+ * `--allow-build-hosts` widens the egress allowlist to the curated native-build/release hosts;
  * `--dev` opens only run/shell networking + common dev ports;
  * `--full-network` also drops install/add egress back to the default bridge.
  */
 function applyOneOffModes(config: SandboxConfig, globals: Globals): SandboxConfig {
-  if (!globals.dev && !globals.fullNetwork) return config;
-  const run = { ...config.run, network: 'on' as const, devPorts: true };
-  if (!globals.fullNetwork) return { ...config, run };
-  return { ...config, install: { ...config.install, network: 'on' }, run };
+  let cfg = config;
+  if (globals.allowBuildHosts) {
+    const extra = buildHostSuffixes().filter((h) => !cfg.egress.allow.includes(h));
+    if (extra.length) cfg = { ...cfg, egress: { ...cfg.egress, allow: [...cfg.egress.allow, ...extra] } };
+  }
+  if (!globals.dev && !globals.fullNetwork) return cfg;
+  const run = { ...cfg.run, network: 'on' as const, devPorts: true };
+  if (!globals.fullNetwork) return { ...cfg, run };
+  return { ...cfg, install: { ...cfg.install, network: 'on' }, run };
 }
 
 /** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
@@ -318,13 +346,18 @@ function requireLockfileForFrozen(facts: ProjectFacts, frozen: boolean): void {
  * npx|…>` pass-through all resolve here, so risk-checking and planning happen once, in one
  * place, instead of being re-derived per command. Bad input and unknown commands `fail()`.
  */
-function resolveRoute(cmd: string, args: string[], facts: ProjectFacts): Route {
+function resolveRoute(cmd: string, args: string[], facts: ProjectFacts): Route | undefined {
   switch (cmd) {
     case 'install':
       return { model: 'install', pm: facts.pm, frozen: false, args };
     case 'add':
       if (args.length === 0) fail('usage: sandbox add <pkg>...  (deliberate package.json change)');
       return { model: 'add', pm: facts.pm, pkgs: args };
+    case 'script': {
+      const [script, ...rest] = args;
+      if (!script) fail('usage: sandbox script <name> [args]');
+      return { model: 'run', argv: pmScriptArgv(facts.pm, script, rest) };
+    }
     case 'run': {
       const argv = args[0] === '--' ? args.slice(1) : args;
       if (argv.length === 0) fail('usage: sandbox run -- <cmd...>');
@@ -334,13 +367,28 @@ function resolveRoute(cmd: string, args: string[], facts: ProjectFacts): Route {
       return { model: 'run', argv: ['bash', '-l'] };
     default: {
       // Transparent pass-through: `sandbox npm install`, `sandbox pnpm add zod`, `sandbox npm run dev`.
-      const route = routePassthrough([cmd, ...args]);
-      if (!route) {
-        fail(`unknown command '${cmd}'\n  try a command you know:  sandbox npm install · sandbox pnpm add zod · sandbox npm run dev\n  or a sandbox command:     init · setup · allow · doctor · build · install · add · run · shell`);
-      }
-      return route;
+      return routePassthrough([cmd, ...args]);
     }
   }
+}
+
+/**
+ * Resolve a command against the sandbox subcommands, passthrough PM/runners, and package.json
+ * scripts. Scripts are the generic fallback: `sandbox test`, `sandbox lint`, `sandbox typecheck`,
+ * etc. `dev` is just one script-shaped command that prefers `dev -> start -> serve`; its only other
+ * semantic — dev-mode networking — lives in `main()`, where `sandbox dev` folds into `globals.dev`
+ * so there is one effective config (see {@link applyOneOffModes}).
+ */
+function resolveCommand(cmd: string, args: string[], facts: ProjectFacts): Route {
+  const route = resolveRoute(cmd, args, facts);
+  if (route) return route;
+  if (cmd === 'dev') {
+    const scriptName = ['dev', 'start', 'serve'].find((s) => s in facts.scripts);
+    if (!scriptName) fail('no "dev", "start", or "serve" script found in package.json');
+    return { model: 'run', argv: pmScriptArgv(facts.pm, scriptName, args) };
+  }
+  if (facts.scripts[cmd]) return { model: 'run', argv: pmScriptArgv(facts.pm, cmd, args) };
+  fail(`unknown command '${cmd}'\n  try a command you know:  sandbox npm install · sandbox pnpm add zod · sandbox npm run dev · sandbox dev\n  or a sandbox command:     init · setup · allow · doctor · build · install · add · script · run · shell`);
 }
 
 /**
@@ -1018,8 +1066,35 @@ async function runDemoCommand(backend: ContainerBackend, rootDir: string, config
   }
 }
 
+/**
+ * Print the "new version available" notice (from cache — never blocks) and kick off the once-a-day
+ * background refresh. Stays out of the way: only on an interactive stderr, and skipped for machine
+ * output (--json/--dry-run), CI, and the documented opt-outs (--no-update-check, NO_UPDATE_NOTIFIER,
+ * config `updateCheck: false`). `cliEntry` is this bin's path, used to re-spawn the detached checker.
+ */
+function maybeNotifyUpdate(globals: Globals, cliEntry: string, rootDir: string, configPath?: string): void {
+  if (globals.json || globals.dryRun || globals.noUpdateCheck || disabledByEnv() || !process.stderr.isTTY) return;
+  try {
+    if (!readConfig(rootDir, configPath).updateCheck) return;
+  } catch {
+    // unreadable/invalid config — fall through; the check is harmless and env/flag opt-outs still apply
+  }
+  const current = selfVersion();
+  if (!current) return;
+  const banner = updateBanner(current);
+  if (banner) process.stderr.write(banner);
+  scheduleUpdateCheck(cliEntry);
+}
+
 async function main(): Promise<number> {
   const { globals, cmd, args } = parse(process.argv.slice(2));
+
+  // Hidden re-entry: the detached background checker (spawned by scheduleUpdateCheck) runs one
+  // registry lookup, writes the cache, and exits. Must short-circuit before any other dispatch.
+  if (cmd === '__update-check') {
+    await refreshUpdateCache();
+    return 0;
+  }
 
   if (cmd === undefined || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(HELP);
@@ -1036,6 +1111,7 @@ async function main(): Promise<number> {
 
   const invocationCwd = process.cwd();
   const context = resolveProjectContext(invocationCwd, globals.config);
+  maybeNotifyUpdate(globals, process.argv[1] ?? '', context.rootDir, context.configPath);
 
   if (cmd === 'init') {
     let preset: string | undefined;
@@ -1233,6 +1309,9 @@ async function main(): Promise<number> {
 
   const loaded = loadConfig(context.rootDir, context.configPath);
   for (const warning of loaded.warnings) log.warn(warning);
+  // `sandbox dev` is sugar for `sandbox --dev <dev|start|serve>`: fold it into globals here so the
+  // dev-mode network/devPorts open up in the ONE effective config every path below shares.
+  if (cmd === 'dev') globals.dev = true;
   const config = applyOneOffModes(loaded.config, globals);
   const facts = probeProject(context.rootDir, config, {
     envFiles: globals.envFiles.filter(Boolean),
@@ -1292,13 +1371,14 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'preflight') {
-    // `sandbox preflight [pm cmd…]` checks WITHOUT installing. Default to the install surface.
+    // `sandbox preflight [cmd…]` checks WITHOUT installing. Default to the install surface; otherwise
+    // resolve the same way the real command would (pm pass-through AND package.json scripts).
     const inner = args[0];
-    const checkRoute = inner ? resolveRoute(inner, args.slice(1), facts) : resolveRoute('install', [], facts);
+    const checkRoute = inner ? resolveCommand(inner, args.slice(1), facts) : resolveCommand('install', [], facts);
     return runPreflightCommand(globals, config, facts, checkRoute);
   }
 
-  const route = resolveRoute(cmd, args, facts);
+  const route = resolveCommand(cmd, args, facts);
   const blocked = await preflightRoute(globals, config, facts, route);
   if (blocked !== undefined) return blocked;
   return emit(planForRoute(route, config, facts, opts));

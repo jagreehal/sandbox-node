@@ -13,6 +13,8 @@ export const SandboxConfigSchema = z
     $schema: z.string().optional(),
     /** Image tag for the sandbox container (override per project if needed). */
     image: z.string().default('node-install-sandbox:latest'),
+    /** Check npm for a newer `sandbox` once a day and print a notice (set false to opt the project out). */
+    updateCheck: z.boolean().default(true),
     grants: z
       .object({
         'ssh-agent': z.boolean().default(false),

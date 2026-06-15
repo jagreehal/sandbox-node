@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { classifyHost, describeBlockedHosts, renderBlockedHostLines } from '../src/hosts.js';
+import { buildHostSuffixes, classifyHost, describeBlockedHosts, renderBlockedHostLines } from '../src/hosts.js';
+
+describe('buildHostSuffixes', () => {
+  it('is the native-build/cdn/git curated set — binaries & sources, never registries', () => {
+    const hosts = buildHostSuffixes();
+    expect(hosts).toContain('nodejs.org'); // node-gyp headers
+    expect(hosts).toContain('github.com'); // release binaries
+    expect(hosts).toContain('binaries.prisma.sh');
+    expect(hosts).toContain('cdn.playwright.dev');
+    // registries are a separate trust concern and must NOT be in the build bundle
+    expect(hosts).not.toContain('npmjs.org');
+    expect(hosts).not.toContain('yarnpkg.com');
+    expect(hosts).not.toContain('jsr.io');
+    expect(hosts.every((h) => classifyHost(h).category !== 'registry')).toBe(true);
+  });
+});
 
 describe('classifyHost', () => {
   it('marks the public registries as common registry hosts', () => {

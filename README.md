@@ -40,7 +40,8 @@ If you want the reasoning before the command reference, read the three short pos
 sandbox setup --vibe         # one-button setup
 sandbox npm install          # install deps — lifecycle scripts are contained
 sandbox pnpm add zod         # add a dependency (saved exact by default)
-sandbox npm run dev          # run a dev server, tests, a build, …
+sandbox dev                  # run dev/start/serve with native PM syntax
+sandbox test                 # run any non-colliding package.json script
 sandbox npx vite             # one-off tools too
 ```
 
@@ -82,7 +83,7 @@ as `sandbox npm audit`, `sandbox bun audit`, `sandbox npm audit signatures`, and
 git clone https://github.com/some/app && cd app
 sandbox setup --vibe         # safe defaults, but dev servers are reachable
 sandbox npm install
-sandbox npm run dev          # http://localhost:5173 (common dev ports auto-forwarded)
+sandbox dev                  # http://localhost:5173 (common dev ports auto-forwarded)
 ```
 
 For coding agents (Claude Code, Cursor, …), `sandbox setup --agent` always writes the agent
@@ -95,7 +96,7 @@ into its own context. The config itself changes only when `setup` creates it: wi
 while keeping host credentials out. If a config already exists, `setup` reuses it unchanged and only
 writes the artifacts. The hook enforces the rule below instead of trusting the model to follow it:
 
-> Use `sandbox npm install` and `sandbox npm run dev`. Don't run npm directly.
+> Use `sandbox npm install`, `sandbox dev`, and `sandbox test`. Don't run npm directly.
 
 To contain the agent's whole blast radius, run it inside a generated devcontainer with
 `sandbox devcontainer init`. It applies the same policy in persistent form. See
@@ -356,13 +357,19 @@ Pass-through (recommended) — put `sandbox` in front of the command you already
   sandbox npm install <pkg> | pnpm add <pkg> | bun add <pkg>  add a dependency
   sandbox npm audit | pnpm audit | yarn audit | bun audit     read-only advisory audit
   sandbox npm audit signatures | pnpm audit signatures        verify registry signatures / provenance
-  sandbox npm run dev | npm test | npx <tool> | bunx <tool>   run a script or one-off tool
+  sandbox dev | test | lint | typecheck                       run package.json scripts natively
+  sandbox script <name>                                       run a colliding script name explicitly
+  sandbox npm run dev | npm test | npx <tool> | bunx <tool>  explicit PM / runner passthrough still works
 
 Sandbox commands:
   init [--preset N]    create sandbox.config.json from a preset (interactive, or --preset).
                        --vibe / --agent are shortcuts for those presets
   setup [--preset N]   one-button onboarding: write config if needed, check the backend,
                        build images if needed, then print the next commands
+  dev                  auto-detect the package manager and run the first of
+                       dev > start > serve from package.json
+  script <name>        run a specific package.json script with native PM syntax,
+                       even when the name collides with a sandbox command like build
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
   doctor               check config, package manager, backend, daemon, and image state
   build                build or rebuild the sandbox and egress-proxy images
@@ -428,6 +435,9 @@ globals (before the command):
                      (the strict preset sets this)
   --full-network     scarier escape hatch: run once with full network (no allowlist);
                      with run/shell it also enables common dev ports
+  --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
+                     Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
+                     (still a default-deny allowlist, just a bigger one)
   --dry-run          preview what would be mounted, allowed, and run, then stop
   --json             print the resolved execution plan as JSON instead of running it
                      (env values are redacted; use the library API for the raw plan)
@@ -438,14 +448,16 @@ you also install sibling tools like `sandbox-python` globally).
 
 | Command | What it does |
 | --- | --- |
-| `sandbox init` | Create `sandbox.config.json` from a preset. Interactive picker, or non-interactive with `--preset strict\|balanced\|vibe\|agent\|trusted [--force]` (`--vibe`/`--agent` are shortcuts). |
+| `sandbox init` | Create `sandbox.config.json` from a preset. Interactive picker, or non-interactive with `--preset strict\|balanced\|vibe\|agent\|trusted [--force]` (`--vibe`/`--agent` are shortcuts). The interactive picker can also pre-allow opt-in egress bundles (host groups): `build-tools` (native-module binaries) plus narrow cloud groups (`vercel`/`cloudflare`/`supabase`/`aws`, control-plane hosts only — never `*.amazonaws.com`). Nothing is preselected. |
 | `sandbox setup` | One-button onboarding. Writes `sandbox.config.json` if needed, checks Docker, builds images if needed, then prints the next commands. |
 | `sandbox allow <host...>` | Add host(s) to `egress.allow` for this repo. Use it when a trusted install needs something like `nodejs.org` or a private registry host. |
 | `sandbox path [install\|uninstall\|status\|print]` | Install shell wrappers (zsh/bash/fish/pwsh) so a bare `npm/pnpm/yarn/bun install` and `npx`/`bunx` route through `sandbox` automatically — the human equivalent of the agent hook. Wraps the package-manager front-ends via shell functions (not a `$PATH` change). Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`. See [Make it automatic](#make-it-automatic-sandbox-path-the-human-prefix-guard). |
 | `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, flags a container-escape CVE in the runtime and an end-of-life Node line in the sandbox image, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
 | `sandbox install [args]` | Expert form of the install model. Most users should use `sandbox npm install`, `sandbox pnpm install`, or `sandbox yarn install`. Persistence paths and `package.json` stay read-only. The project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates. Host credentials stay out. `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. |
 | `sandbox add <pkg...>` | Expert form of the add model. Most users should use `sandbox npm install <pkg>` or `sandbox pnpm add <pkg>`. This model keeps the same isolation as `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. |
-| `sandbox run -- <cmd>` | Expert form of the run model. Most users should use `sandbox npm test`, `sandbox npm run dev`, `sandbox npx <tool>`, or similar. `run.network` defaults to `none`. |
+| `sandbox dev` | Convenience script command for the common dev-server case. Resolves `dev`, then `start`, then `serve`, and enables dev-mode networking + common dev ports for that invocation. |
+| `sandbox script <name>` | Run a specific `package.json` script with native PM syntax, even when the name collides with a sandbox command such as `build`. |
+| `sandbox run -- <cmd>` | Expert form of the run model. Most users should use `sandbox test`, `sandbox dev`, `sandbox npx <tool>`, or similar. `run.network` defaults to `none`. |
 | `sandbox shell` | Run `bash -l` in the container. |
 | `sandbox preflight [pm cmd]` | Supply-chain review WITHOUT installing. Runs the same gates as a real install (release-age, malware, deprecation, risk hints), prints every finding + a pin suggestion per blocked package, and exits non-zero exactly when that install would be blocked. Use `--json` for a structured report. |
 | `sandbox scan` | Retroactive malware sweep over the committed lockfile. Re-queries OSV for every resolved version and exits non-zero if any installed dep is NOW flagged as malware — catches deps that turned malicious after you installed them. No container needed; cheap enough for cron. |
@@ -461,7 +473,7 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox badge [--workflow F]` | Print a markdown badge for the README. Bare = static provenance badge; `--workflow sandbox.yml` = CI-backed verified badge that links to real evidence. |
 | `sandbox devcontainer init` | Generate a `.devcontainer/` from the same `sandbox.config.json` so the persistent form inherits the same hardening. Add `--force` to overwrite. |
 
-The tool picks a package manager from the lockfile: `pnpm-lock.yaml` first, then `yarn.lock`, then `bun.lock`/`bun.lockb`, then npm.
+The tool picks a package manager from `package.json#packageManager` when present; otherwise it falls back to lockfiles (`pnpm-lock.yaml`, then `yarn.lock`, then `bun.lock`/`bun.lockb`, then npm).
 
 ## Install Risk Hints
 
@@ -799,13 +811,13 @@ sandbox --json npm install | jq '{network, argv, mounts}'
 
 ## Recommended Workflow
 
-Put `sandbox` in front of the commands you'd run anyway, so installs and anything that
-executes dependencies happen in the container:
+Put `sandbox` in front of the commands you'd run anyway, so installs and package scripts
+happen in the container:
 
 ```bash
 sandbox npm install
-sandbox npm test
-sandbox npm run dev
+sandbox test
+sandbox dev
 ```
 
 That rule keeps you out of the common trap: host Node trying to execute Linux-built `node_modules`.
@@ -863,13 +875,13 @@ If a repo already has host-built dependencies, reset once and switch over:
 rm -rf node_modules
 sandbox init
 sandbox npm install
-sandbox npm test
+sandbox test
 ```
 
 After that, keep the workflow simple:
 
 - install with `sandbox npm install`
-- execute with `sandbox npm test`, `sandbox npm run dev`, …
+- execute with `sandbox test`, `sandbox dev`, …
 
 ## Common Commands
 
@@ -877,8 +889,9 @@ After that, keep the workflow simple:
 sandbox doctor                  # check setup
 sandbox npm install             # install dependencies safely
 sandbox pnpm add zod            # add a dependency safely
-sandbox npm test                # run tests against sandbox-built deps
-sandbox npm run dev             # run a dev server in the sandbox
+sandbox test                    # run tests against sandbox-built deps
+sandbox dev                     # run a dev server in the sandbox
+sandbox script build            # run a colliding script name explicitly
 sandbox --env-from .env tsx foo.ts   # run a one-off script with .env vars injected
 sandbox --env NPM_TOKEN npm install   # grant ONE host secret in (e.g. a private-registry token)
 sandbox --json npm install      # inspect the execution plan
@@ -887,6 +900,32 @@ sandbox --json npm install      # inspect the execution plan
 Granting a secret is opt-in and per-invocation: `--env <NAME>` forwards a single host env var by
 name (nothing else comes with it), and `--env-from <path>` injects the values from one env file.
 A private registry also needs its host allowed — `sandbox allow npm.pkg.github.com`.
+
+## Monorepos (Turborepo, Nx, workspaces)
+
+Nothing special to configure — `sandbox` treats your root `package.json` scripts as the entry point,
+and those scripts are what call `turbo`/`nx`:
+
+```bash
+sandbox pnpm install            # installs the WHOLE workspace; risk gates scan every package's deps,
+                                #   not just the root manifest (reads pnpm-workspace.yaml / "workspaces")
+sandbox dev                     # runs your root "dev" script (e.g. "turbo dev") with dev networking
+sandbox test                    # runs "test" (e.g. "turbo run test" / "nx run-many -t test")
+sandbox turbo run build --filter=web   # or call the task runner directly
+sandbox nx build web                   # turbo/nx resolve from node_modules/.bin in the container
+```
+
+Three things worth knowing:
+
+- **`sandbox build` runs the sandbox image build, not your `build` script.** In most Turbo/Nx repos
+  the root `build` script is `turbo build` / `nx build` — that name collides with a built-in. Use
+  **`sandbox script build`** (or `sandbox pnpm build`) to run the package.json script explicitly.
+- **Remote caching needs an egress allow.** Turbo Remote Cache and Nx Cloud phone home, so allow their
+  hosts once: `sandbox allow cloud.nx.app` (Nx Cloud) or your Vercel Remote Cache host. Local caches
+  (`.turbo/`, `.nx/`) live in the mounted workspace and persist; the turbo/nx daemon is per-run.
+- **Shell wrappers cover the package managers, not the task runners.** `sandbox path install` routes
+  bare `npm/pnpm/yarn/bun/npx/bunx` through the sandbox automatically; a bare `turbo`/`nx` typed on the
+  host is **not** auto-wrapped — run it as `sandbox turbo …` or via a script (`sandbox dev`/`sandbox script build`).
 
 ## Secrets, env vars, and `.env` files
 
@@ -987,7 +1026,7 @@ jobs:
         with: { node-version: 22 }
       - run: npm i -g @jagreehal/sandbox-node
       - run: sandbox --frozen --fail-on-egress npm install
-      - run: sandbox npm test
+      - run: sandbox test
 ```
 
 **GitLab CI** (Docker-in-Docker service for the sandbox container):
@@ -1000,7 +1039,7 @@ install:
   script:
     - npm i -g @jagreehal/sandbox-node
     - sandbox --frozen --fail-on-egress npm install
-    - sandbox npm test
+    - sandbox test
 ```
 
 `--frozen` needs a committed, in-sync lockfile. To allow a host your install legitimately needs
@@ -1158,12 +1197,13 @@ Astro `4321`, Angular `4200`, webpack `8080`):
 
 ```bash
 sandbox setup --vibe
-sandbox npm run dev             # open http://localhost:5173 — whichever port your app picks is mapped
+sandbox dev                     # open http://localhost:5173 — whichever port your app picks is mapped
 ```
 
 Works the same for `pnpm`, `yarn`, and `bun`:
 
 ```bash
+sandbox dev
 sandbox pnpm run dev
 sandbox yarn run dev
 sandbox bun run dev
@@ -1222,7 +1262,7 @@ ports or flip on the curated set:
 - If it does not find one, it falls back to common workspace markers such as `pnpm-workspace.yaml`, workspace `package.json`, and `turbo.json`.
 - **Root resolution is deterministic**, in this order: an explicit `--config <path>` wins; otherwise the nearest `sandbox.config.json` walking up from your cwd; otherwise the nearest ancestor holding any workspace marker; otherwise your cwd. A directory with several markers at once (say a root `package.json` `workspaces` field *and* a `pnpm-workspace.yaml`) is unambiguous — they all point at that same directory. If you ever want to override the choice, drop a `sandbox.config.json` at the root you mean, or pass `--config`.
 - `sandbox npm install`, `sandbox pnpm add`, and the expert `sandbox install` / `sandbox add` forms run at the workspace root.
-- `sandbox npm run dev`, `sandbox npm test`, and the expert `sandbox run -- ...` / `sandbox shell` forms run from the package directory you invoked them from.
+- `sandbox dev`, `sandbox test`, other script-fallback commands, and the expert `sandbox run -- ...` / `sandbox shell` forms run from the package directory you invoked them from.
 - `sandbox doctor` shows both the chosen workspace root and the package workdir.
 
 This fits:

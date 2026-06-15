@@ -34,9 +34,11 @@ const UPDATE_VERBS: Record<PackageManager, Set<string>> = {
   bun: new Set(['update']),
 };
 
-/** Other leaders that are always a `run` (dev servers, one-off tools, scripts). `bunx` is bun's
- *  fetch-and-run runner (≈ `npx`); the `bun` package-manager verbs are routed above. */
-const RUN_LEADERS = new Set(['npx', 'pnpx', 'pnpm-exec', 'yarn-dlx', 'bunx', 'node', 'tsx', 'deno', 'vite', 'next', 'astro']);
+/** Other leaders that are always a `run` (dev servers, monorepo task runners, one-off tools, scripts).
+ *  `bunx` is bun's fetch-and-run runner (≈ `npx`); the `bun` package-manager verbs are routed above.
+ *  `turbo`/`nx` are the monorepo task runners, so `sandbox turbo dev` / `sandbox nx build` work directly
+ *  (they resolve from node_modules/.bin in the container, same as `vite`/`next`). */
+const RUN_LEADERS = new Set(['npx', 'pnpx', 'pnpm-exec', 'yarn-dlx', 'bunx', 'node', 'tsx', 'deno', 'vite', 'next', 'astro', 'turbo', 'nx']);
 
 const FROZEN_FLAGS = new Set(['--frozen-lockfile', '--immutable']);
 

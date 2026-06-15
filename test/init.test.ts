@@ -2,11 +2,34 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureLocalConfigIgnored, initNextCommands, initTips } from '../src/init.js';
+import { applyHostGroups, ensureLocalConfigIgnored, initNextCommands, initTips } from '../src/init.js';
+import { SandboxConfigSchema } from '../src/config.js';
 
 function tmp(): string {
   return mkdtempSync(path.join(tmpdir(), 'sbx-init-'));
 }
+
+describe('applyHostGroups', () => {
+  const cfg = () => SandboxConfigSchema.parse({});
+
+  it('adds the build-tools bundle to egress.allow and reports what was added', () => {
+    const config = cfg();
+    const added = applyHostGroups(config, ['build-tools']);
+    expect(added).toContain('nodejs.org');
+    expect(added).toContain('github.com');
+    expect(config.egress.allow).toEqual(expect.arrayContaining(['npmjs.org', 'nodejs.org', 'github.com']));
+  });
+
+  it('is a no-op for an empty selection or an unknown group', () => {
+    expect(applyHostGroups(cfg(), [])).toEqual([]);
+    expect(applyHostGroups(cfg(), ['does-not-exist'])).toEqual([]);
+  });
+
+  it('never duplicates a host already in the allowlist', () => {
+    const config = SandboxConfigSchema.parse({ egress: { allow: ['npmjs.org', 'nodejs.org'] } });
+    expect(applyHostGroups(config, ['build-tools'])).not.toContain('nodejs.org');
+  });
+});
 
 describe('ensureLocalConfigIgnored', () => {
   it('creates .gitignore with the local override entry when none exists', () => {
@@ -43,7 +66,7 @@ describe('initNextCommands', () => {
     for (const preset of ['balanced', 'strict'] as const) {
       const cmds = initNextCommands(preset);
       expect(cmds).toContain('sandbox npm install');
-      expect(cmds).toContain('sandbox npm test');
+      expect(cmds).toContain('sandbox test');
     }
   });
 
@@ -51,7 +74,7 @@ describe('initNextCommands', () => {
     for (const preset of ['vibe', 'agent', 'trusted'] as const) {
       const cmds = initNextCommands(preset);
       expect(cmds).toContain('sandbox npm install');
-      expect(cmds).toContain('sandbox npm run dev');
+      expect(cmds).toContain('sandbox dev');
     }
   });
 });

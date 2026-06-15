@@ -92,7 +92,7 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
   console.log(`secrets: ${secrets}`);
   console.log('');
   console.log('Next:');
-  for (const command of preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox npm run dev'] : ['sandbox npm install', 'sandbox npm test']) {
+  for (const command of preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox dev'] : ['sandbox npm install', 'sandbox test']) {
     console.log(`  ${command}`);
   }
 

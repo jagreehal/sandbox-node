@@ -22,9 +22,16 @@ review-before-install — and you only run the real install once the user has cl
    `npm/pnpm/yarn/bun install` (+ `npx`/`bunx`) through sandbox automatically, so neither of you has
    to remember the prefix. `sandbox setup` also offers to wire this. See [REFERENCE.md](REFERENCE.md).
 
+   For scripts, prefer the short form: `sandbox dev`, `sandbox test`, `sandbox lint`. If a script
+   name collides with a sandbox command such as `build`, use `sandbox script build`.
+
    If `package.json` pins a `"packageManager"` (pnpm/yarn) other than the image's baked default,
    the first install bakes that version into the image, so expect a one-time image build before the
    install runs. It's automatic — no config needed.
+
+   For a project with native modules (node-gyp, Prisma, Playwright, Cypress, Electron) that download
+   binaries during `postinstall`, the interactive `sandbox init` picker can pre-allow the
+   `build-tools` egress bundle so those installs don't block on the first run (see step 4).
 
 2. **Review pass — check WITHOUT installing.** Use the `preflight` command: it runs the
    gates over what the command would pull and **never installs**, so this is always safe to
@@ -65,6 +72,13 @@ review-before-install — and you only run the real install once the user has cl
      (`sandbox <pm> add <pkg>@<version>`)
    - Abort → stop; nothing was installed.
 
+   **If the install itself blocks on egress** (not a preflight finding — a `postinstall` tried to
+   reach a host that isn't on the allowlist), the proxy reports the blocked host. When it's a known
+   **build host** (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron
+   binaries), re-run with `--allow-build-hosts` — it adds the curated native-build hosts for that run
+   and **stays a default-deny allowlist** (not full network). Prefer the narrowest fix: allow just
+   the exact host with `sandbox allow <host>` when only one is needed.
+
 5. **Report** exactly what ran, which overrides were applied and why, and what installed.
 
 ## Rules
@@ -73,8 +87,11 @@ review-before-install — and you only run the real install once the user has cl
   type the override themselves if they insist.
 - **Every override must be a real flag** the user approved — never silently relax the gate.
 - `<pm>` is the user's package manager (npm/pnpm/yarn/bun); match their lockfile/config.
+- For `package.json` scripts, prefer `sandbox <script>` over `sandbox <pm> run <script>`, and use
+  `sandbox script <name>` when the script name collides with a sandbox command.
 - Prefer the narrowest override (`--allow-recent <pkg>`) over the blanket one
-  (`--min-release-age 0`).
+  (`--min-release-age 0`). Same for egress: `sandbox allow <host>` (one host) before
+  `--allow-build-hosts` (the curated bundle) before `--full-network` (no allowlist at all).
 - Non-interactive / CI / "just set it up": skip the prompts and pick the strict default
   (abort on any finding) unless the user pre-stated their tolerance — then encode it as flags.
 

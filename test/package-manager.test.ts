@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { parsePackageManagerField, pmAuditFixArgv, pmAuditSignaturesArgv, pmUpdateArgv } from '../src/package-manager.js';
+import { parsePackageManagerField, pmAuditFixArgv, pmAuditSignaturesArgv, pmDefaultRegistryHost, pmScriptArgv, pmUpdateArgv } from '../src/package-manager.js';
+
+describe('pmDefaultRegistryHost', () => {
+  it('returns yarnpkg.com only for yarn (classic defaults there); npm/pnpm/bun use the npm registry', () => {
+    expect(pmDefaultRegistryHost('yarn')).toBe('yarnpkg.com');
+    expect(pmDefaultRegistryHost('npm')).toBeUndefined();
+    expect(pmDefaultRegistryHost('pnpm')).toBeUndefined();
+    expect(pmDefaultRegistryHost('bun')).toBeUndefined();
+  });
+});
 
 describe('parsePackageManagerField', () => {
   it('parses name and version', () => {
@@ -32,6 +41,21 @@ describe('pmUpdateArgv', () => {
     expect(pmUpdateArgv('pnpm', 'up', ['--latest'])).toEqual(['corepack', 'pnpm', 'up', '--latest']);
     expect(pmUpdateArgv('yarn', 'upgrade', [])).toEqual(['corepack', 'yarn', 'upgrade']);
     expect(pmUpdateArgv('bun', 'update', [])).toEqual(['bun', 'update']);
+  });
+});
+
+describe('pmScriptArgv', () => {
+  it('uses each package manager’s native script invocation form', () => {
+    expect(pmScriptArgv('npm', 'dev', [])).toEqual(['npm', 'run', 'dev']);
+    expect(pmScriptArgv('pnpm', 'dev', [])).toEqual(['pnpm', 'dev']);
+    expect(pmScriptArgv('yarn', 'dev', [])).toEqual(['yarn', 'dev']);
+    expect(pmScriptArgv('bun', 'dev', [])).toEqual(['bun', 'dev']);
+  });
+
+  it('forwards npm script args through `--` while leaving other managers untouched', () => {
+    expect(pmScriptArgv('npm', 'test', ['--watch'])).toEqual(['npm', 'run', 'test', '--', '--watch']);
+    expect(pmScriptArgv('npm', 'test', ['--', '--watch'])).toEqual(['npm', 'run', 'test', '--', '--watch']);
+    expect(pmScriptArgv('pnpm', 'test', ['--watch'])).toEqual(['pnpm', 'test', '--watch']);
   });
 });
 

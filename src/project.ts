@@ -44,6 +44,8 @@ export interface ProjectFacts {
   hasLockfile: boolean;
   /** `package.json` is present (gates the read-only manifest mount). */
   hasPackageJson: boolean;
+  /** The root manifest's `scripts` map ({} when absent) — what `sandbox <script>`/`sandbox dev` route against. */
+  scripts: Record<string, string>;
   /**
    * Direct dependencies the supply-chain gates should check. For a single package that's the root
    * manifest's deps/devDeps/optionalDeps; for a workspace it's the UNION across the root and every
@@ -66,6 +68,19 @@ interface PackageManifest {
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   workspaces?: string[] | { packages?: string[] };
+  scripts?: Record<string, string>;
+}
+
+/** The root manifest's `scripts` map ({} when absent or unreadable) — the source for `sandbox <script>` routing. */
+function readPackageScripts(cwd: string): Record<string, string> {
+  const file = path.join(cwd, 'package.json');
+  if (!existsSync(file)) return {};
+  try {
+    const scripts = (JSON.parse(readFileSync(file, 'utf8')) as PackageManifest).scripts;
+    return scripts && typeof scripts === 'object' ? scripts : {};
+  } catch {
+    return {};
+  }
 }
 
 function readDirectDependencies(cwd: string): DirectDependency[] {
@@ -187,6 +202,7 @@ export function probeProject(cwd: string, config: SandboxConfig, opts: ProbeOpti
     isYarnBerry: isYarnBerry(cwd),
     hasLockfile: lockfilePresent(cwd, pm),
     hasPackageJson: existsSync(path.join(cwd, 'package.json')),
+    scripts: readPackageScripts(cwd),
     directDependencies: readWorkspaceDependencies(cwd),
     existingPersistencePaths: PERSISTENCE_PATHS.filter((p) => existsSync(path.join(cwd, p))),
     homedir: os.homedir(),

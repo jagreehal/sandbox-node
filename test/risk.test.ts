@@ -23,6 +23,7 @@ function facts(cwd: string, pm: ProjectFacts['pm'], directDependencies: ProjectF
     isYarnBerry: false,
     hasLockfile: true,
     hasPackageJson: true,
+    scripts: {},
     directDependencies,
     existingPersistencePaths: [],
     homedir: '/home/dev',

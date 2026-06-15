@@ -16,8 +16,8 @@ export function isCompletionShell(value: string): value is CompletionShell {
  */
 export const SANDBOX_COMMANDS = [
   'init', 'setup', 'allow', 'path', 'doctor', 'build', 'verify', 'scan', 'secrets', 'feeds', 'delta', 'preflight',
-  'badge', 'devcontainer', 'completion', 'shell', 'install', 'add', 'run', 'update', 'upgrade', 'audit', 'help',
-  'npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx', 'node', 'tsx',
+  'badge', 'devcontainer', 'completion', 'shell', 'install', 'add', 'run', 'update', 'upgrade', 'audit', 'dev', 'script', 'help',
+  'npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx', 'node', 'tsx', 'turbo', 'nx',
 ] as const;
 
 /** Global flags parsed before the command (mirrors `parse()` in cli.ts). */
