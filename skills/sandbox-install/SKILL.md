@@ -77,6 +77,14 @@ Run the review pass first, then run the real install once the user has cleared t
    and **stays a default-deny allowlist** (not full network). Prefer the narrowest fix: allow
    the exact host with `sandbox allow <host>` when only one is needed.
 
+   **If pnpm stops for dependency build-script approval** (`allowBuilds` placeholders in
+   `pnpm-workspace.yaml`), keep the decision inside sandbox:
+   - On a TTY, let `sandbox` prompt and re-run.
+   - Non-interactive: run `sandbox approve-builds` (all pending) or
+     `sandbox approve-builds <pkg...>` (specific packages).
+   - For an unattended run the user has already approved, add `--allow-all-builds`.
+   - If the user wants to reject one, run `sandbox approve-builds --deny <pkg>`.
+
 5. **Report** exactly what ran, which overrides were applied and why, and what installed.
 
 ## Rules
@@ -90,6 +98,8 @@ Run the review pass first, then run the real install once the user has cleared t
 - Prefer the narrowest override (`--allow-recent <pkg>`) over the blanket one
   (`--min-release-age 0`). Same for egress: `sandbox allow <host>` (one host) before
   `--allow-build-hosts` (the curated bundle) before `--full-network` (no allowlist at all).
+- For pnpm build scripts, prefer `sandbox approve-builds <pkg>` over `--allow-all-builds` when the
+  user only trusts a small set of packages.
 - Non-interactive / CI / "just set it up": skip the prompts and pick the strict default
   (abort on any finding) unless the user pre-stated their tolerance — then encode it as flags.
 

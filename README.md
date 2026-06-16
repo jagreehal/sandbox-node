@@ -59,6 +59,11 @@ content store in the project (`.pnpm-store/`). The resulting `node_modules` is t
 store, so run later commands through `sandbox` to reuse it as-is. Running pnpm directly on the host
 rebuilds `node_modules` against the host's own store.
 
+pnpm build-script note: if pnpm leaves dependency build scripts undecided in
+`pnpm-workspace.yaml`, `sandbox` records the decision in the repo for you. On a TTY it prompts,
+writes `allowBuilds` plus `onlyBuiltDependencies`, then re-runs the command. Without a TTY, run
+`sandbox approve-builds` or add `--allow-all-builds`.
+
 native-deps note: installs run on Linux, so package managers fetch the **Linux** build of any
 platform-specific native optional dependency (`@rollup/rollup-linux-*`, `@esbuild/linux-*`,
 `@img/sharp-linux-*`, `lightningcss`, `@swc/core`, …). On a macOS or Windows host those binaries
@@ -382,6 +387,8 @@ Sandbox commands:
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
   doctor               check config, package manager, backend, daemon, and image state
   build                build or rebuild the sandbox and egress-proxy images
+  approve-builds [pkg] record pnpm dependency build-script decisions from
+                       pnpm-workspace.yaml; no args = approve all pending, --deny records false
   preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
                        command would pull, print findings (+ a pin suggestion per blocked
                        package), and exit non-zero exactly when that install would be blocked
@@ -444,6 +451,8 @@ globals (before the command):
                      (the strict preset sets this)
   --full-network     escape hatch: run once with full network (no allowlist) for install
                      and run. Add --dev to also publish the common dev ports.
+  --allow-all-builds approve every pnpm dependency build script without prompting, then re-run
+                     the install/update/audit-fix path
   --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
                      Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
                      (still a default-deny allowlist, just a bigger one)
@@ -460,6 +469,7 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox init` | Create `sandbox.config.json` from a preset. Interactive picker, or non-interactive with `--preset strict\|balanced\|vibe\|agent\|trusted [--force]` (`--vibe`/`--agent` are shortcuts). The interactive picker can also pre-allow opt-in egress bundles (host groups): `build-tools` (native-module binaries) plus narrow cloud groups (`vercel`/`cloudflare`/`supabase`/`aws`, control-plane hosts only — never `*.amazonaws.com`). Nothing is preselected. |
 | `sandbox setup` | One-button onboarding. Writes `sandbox.config.json` if needed, checks Docker, builds images if needed, then prints the next commands. |
 | `sandbox allow <host...>` | Add host(s) to `egress.allow` for this repo. Use it when a trusted install needs something like `nodejs.org` or a private registry host. |
+| `sandbox approve-builds [pkg]` | Record pnpm dependency build-script decisions from `pnpm-workspace.yaml`. With no package names it records every pending build; `--deny` writes `false`. Approved packages are also added to `onlyBuiltDependencies`, and plain `approve-builds` re-runs the install so those scripts build. |
 | `sandbox path [install\|uninstall\|status\|print]` | Install shell wrappers (zsh/bash/fish/pwsh) so a bare `npm/pnpm/yarn/bun install` and `npx`/`bunx` route through `sandbox` automatically — the human equivalent of the agent hook. Wraps the package-manager front-ends via shell functions (not a `$PATH` change). Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`. See [Make it automatic](#make-it-automatic-sandbox-path-the-human-prefix-guard). |
 | `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, flags a container-escape CVE in the runtime and an end-of-life Node line in the sandbox image, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
 | `sandbox install [args]` | Expert form of the install model. Most users should use `sandbox npm install`, `sandbox pnpm install`, or `sandbox yarn install`. Persistence paths and `package.json` stay read-only. The project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates. Host credentials stay out. `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. |
@@ -898,6 +908,7 @@ After that, keep the workflow simple:
 sandbox doctor                  # check setup
 sandbox npm install             # install dependencies safely
 sandbox pnpm add zod            # add a dependency safely
+sandbox approve-builds          # approve pending pnpm dependency build scripts and re-install
 sandbox test                    # run tests against sandbox-built deps
 sandbox dev                     # run a dev server in the sandbox
 sandbox script build            # run a colliding script name explicitly
@@ -936,12 +947,32 @@ Three things worth knowing:
   bare `npm/pnpm/yarn/bun/npx/bunx` through the sandbox automatically; a bare `turbo`/`nx` typed on the
   host is **not** auto-wrapped; run it as `sandbox turbo …` or via a script (`sandbox dev`/`sandbox script build`).
 
+## pnpm build approvals
+
+pnpm can block dependency build scripts and leave placeholder entries in `pnpm-workspace.yaml`.
+If that happens on `sandbox pnpm install`, `sandbox pnpm up`, or `sandbox pnpm audit --fix`,
+`sandbox` keeps the decision inside the install flow:
+
+- On a TTY, it prompts for the packages to allow, writes the decisions into `allowBuilds`, adds approved packages to `onlyBuiltDependencies`, and re-runs the command.
+- On a non-interactive run, it prints the pending packages and the command to record the decision.
+- `sandbox approve-builds` approves every pending package; `sandbox approve-builds esbuild sharp` targets specific ones.
+- `sandbox approve-builds --deny <pkg>` records `false` and removes that package from `onlyBuiltDependencies`.
+- `--allow-all-builds` skips the prompt and approves every pending build script for that run.
+
+```bash
+sandbox pnpm install
+sandbox approve-builds
+sandbox approve-builds --deny sharp
+sandbox --allow-all-builds pnpm up
+```
+
 ## Secrets, env vars, and `.env` files
 
 `sandbox` starts the container with an almost-empty environment. Nothing from your shell or your CI
-runner is forwarded by default: the container gets `SANDBOX=1`, `HOME=/root`, a blanked `CI`, and
-nothing else. Your `~/.npmrc`, `~/.aws`, SSH keys, and the rest of your home directory are not
-mounted at all, so there are no ambient secrets for a dependency to read.
+runner is forwarded by default: the container gets `SANDBOX=1`, `HOME=/root`, and `CI=1` for
+install-class commands. `run` and `dev` keep `CI` blank so a real TTY still works. Nothing else is
+set. Your `~/.npmrc`, `~/.aws`, SSH keys, and the rest of your home directory are not mounted, so a
+dependency has no ambient secrets to read.
 
 You opt a secret in explicitly, per-run or per-project:
 

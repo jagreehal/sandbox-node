@@ -165,12 +165,15 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     }
 
     if (config) {
-      const image = opts.image ?? config.image;
+      // Resolve to the tag a run will actually use (per-fingerprint for the managed image), so the
+      // presence/staleness check inspects that image rather than a bare `:latest` that no longer exists.
+      const spec = resolveBuildSpec(config, opts.image ?? config.image, cwd);
+      const image = spec.tag;
       const present = (await quiet(opts.backend, ['image', 'inspect', image])) === 0;
       // "present" by tag isn't enough: a run rebuilds when the image's spec fingerprint no longer
       // matches the current config (changed base/extras/Dockerfile). Report that so doctor doesn't
       // say "present" right before the next run quietly rebuilds it.
-      const upToDate = present && (await sandboxImageUpToDate(opts.backend, resolveBuildSpec(config, image, cwd)));
+      const upToDate = present && (await sandboxImageUpToDate(opts.backend, spec));
       checks.push({
         level: present && upToDate ? 'ok' : 'info',
         label: 'image',

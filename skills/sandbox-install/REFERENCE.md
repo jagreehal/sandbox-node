@@ -162,6 +162,19 @@ commands hit the real tool untouched.
   shell. The protection is `sandbox` running the install in a container; for CI use
   `sandbox verify` + `--frozen --fail-on-egress`, for agents the `--agent` hook.
 
+## `approve-builds` command (resolve pnpm dependency build scripts)
+
+When pnpm blocks dependency build scripts it records placeholder values in `allowBuilds:` inside
+`pnpm-workspace.yaml` and exits. `sandbox` lets you record the decision without hand-editing YAML:
+
+- `sandbox approve-builds` — approve every pending package and re-run the install flow
+- `sandbox approve-builds esbuild sharp` — record decisions for specific packages
+- `sandbox approve-builds --deny sharp` — record `false` and remove `sharp` from `onlyBuiltDependencies`
+- `sandbox --allow-all-builds pnpm install` — approve every pending build script without prompting
+
+On a TTY, `sandbox pnpm install`, `sandbox pnpm up`, and `sandbox pnpm audit --fix` prompt
+automatically, write `allowBuilds` plus `onlyBuiltDependencies`, then retry the command.
+
 ## Flags this skill uses
 
 | Flag | Effect |
@@ -173,6 +186,7 @@ commands hit the real tool untouched.
 | `--allow-recent <pat>` | Exempt a package-name pattern from the age gate (repeatable; globs ok, e.g. `@scope/*`). |
 | `--deep` | Apply the age gate to the whole resolved tree (lockfile), not just direct deps. |
 | `--risk <off\|basic>` | Disable/enable registry risk hints. |
+| `--allow-all-builds` | Approve every pending pnpm dependency build script without prompting, then re-run the install-class command. Use only when the user has already approved that blanket choice. |
 | `--allow-build-hosts` | Add the curated native-build/release hosts (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron binaries) to the egress allowlist for this run. **Still default-deny** — a bigger allowlist, not full network. Use when a `postinstall` binary download is blocked; prefer `sandbox allow <host>` when only one host is needed. |
 | `--canaries` / `--no-canaries` | Plant fake AWS/Stripe/Slack honeytokens in the install container and fail the run if one reaches the egress proxy log — a credential-theft tripwire on top of default-deny egress. Allowlist egress only; **on by default in the `strict`/`agent` presets**. Names no package manager reads, so it can't break an install; `--no-canaries` turns it off for one run. Applies to the real install, not the `preflight` review pass. |
 | `--dry-run` | Preview mounts/allowlist/command, then stop. On `install`/`add`/`run` this **skips the preflight**; use the `preflight` command for the review pass instead. |
