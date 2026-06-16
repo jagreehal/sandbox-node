@@ -25,7 +25,7 @@ import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, pla
 import { probeProject, type ProjectFacts } from './project.js';
 import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
 import { detectShell, installPath, SHELLS, statusPath, uninstallPath, type PathActionResult, type Shell } from './path-setup.js';
-import { type AdvisoryHit } from './advisory.js';
+import { type AdvisoryHit, type AdvisorySeverityCounts, highestSeverity } from './advisory.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
 import { runScan } from './scan.js';
 import { runDelta } from './delta.js';
@@ -47,6 +47,7 @@ interface Globals {
   image?: string;
   backend: 'docker' | 'podman';
   json: boolean;
+  format?: 'human' | 'json' | 'agent';
   frozen: boolean;
   dev: boolean;
   failOnEgress: boolean;
@@ -253,6 +254,13 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     else if (a === '--image') globals.image = argv[++i];
     else if (a === '--backend') globals.backend = argv[++i] === 'podman' ? 'podman' : 'docker';
     else if (a === '--json') globals.json = true;
+    else if (a === '--format') {
+      const f = argv[++i];
+      if (f === 'json') globals.json = true; // --format json is an alias for --json
+      else if (f === 'agent' || f === 'ai') globals.format = 'agent';
+      else if (f === 'human' || f === 'text') globals.format = 'human';
+      else fail(`--format needs json, agent, or human (got '${f ?? ''}')`);
+    }
     else if (a === '--env') globals.envNames.push(argv[++i] ?? '');
     else if (a === '--env-from' || a === '--env-file') globals.envFiles.push(argv[++i] ?? ''); // --env-file kept as a legacy alias; Node ≥20.6 reserves it, so --env-from is preferred
     else if (a === '--dev') globals.dev = true;
@@ -503,11 +511,222 @@ function logReleaseAgeBlock(violations: ReleaseAgeViolation[], minDays: number, 
 }
 
 function logAdvisoryHits(hits: AdvisoryHit[]): void {
+  if (!hits.length) return;
+  const grouped = new Map<string, AdvisoryHit[]>();
   for (const hit of hits) {
-    const ids = hit.ids.join(', ');
-    if (hit.malware) log.error(`${hit.name}@${hit.version} — KNOWN MALWARE advisory (${ids})`);
-    else log.warn(`${hit.name}@${hit.version} — advisory ${ids}`);
+    const list = grouped.get(hit.name) ?? [];
+    list.push(hit);
+    grouped.set(hit.name, list);
   }
+  // Sort by worst-first: malware > critical > high > moderate > low, then alphabetically
+  const severityOf = (name: string): number => {
+    const g = grouped.get(name)!;
+    if (g.some((h) => h.malware)) return 0;
+    const sev = highestSeverity(g.flatMap((h) => h.advisories ?? []));
+    return sev === 'critical' ? 1 : sev === 'high' ? 2 : sev === 'moderate' ? 3 : 4;
+  };
+  const entries = [...grouped.entries()].sort(([a], [b]) => severityOf(a) - severityOf(b) || a.localeCompare(b));
+  const hasMalware = (name: string) => grouped.get(name)!.some((h) => h.malware);
+  const fmtIds = (h: AdvisoryHit): string => {
+    const ids = h.ids.length <= 4 ? h.ids.join(', ') : `${h.ids.slice(0, 4).join(', ')}, … (+${h.ids.length - 4})`;
+    const sev = highestSeverity(h.advisories ?? []);
+    const tag = h.direct ? ' [direct]' : h.direct === false ? ' [transitive]' : '';
+    const sevLabel = sev ? ` ${sev}` : '';
+    return `${ids}${sevLabel}${tag}`;
+  };
+  for (const [name, group] of entries) {
+    const level = hasMalware(name) ? 'error' : 'warn';
+    const label = hasMalware(name) ? 'KNOWN MALWARE' : 'advisory';
+    if (group.length === 1) {
+      const h = group[0]!;
+      log[level](`${h.name}@${h.version} — ${label} ${fmtIds(h)}`);
+    } else {
+      const header = `${name} (${group.length} version${group.length === 1 ? '' : 's'})`;
+      const items = group.sort((a, b) => a.version.localeCompare(b.version)).map((h) => `  ${h.version} — ${fmtIds(h)}`);
+      log[level]([header, ...items].join('\n'));
+    }
+  }
+}
+
+function logScanSummary(counts: AdvisorySeverityCounts, totalPackages: number, scanned: number, triaged: number): void {
+  const parts: string[] = [];
+  if (counts.critical) parts.push(`${counts.critical} critical`);
+  if (counts.high) parts.push(`${counts.high} high`);
+  if (counts.moderate) parts.push(`${counts.moderate} moderate`);
+  if (counts.low) parts.push(`${counts.low} low`);
+  if (!parts.length) return;
+  const triageNote = triaged ? ` (${triaged} triaged)` : '';
+  log.warn(`scan: ${parts.join(', ')} across ${totalPackages} package(s)${triageNote} (${scanned} scanned)`);
+}
+
+/** Generate an actionable fix line for a package. */
+function formatFixLine(name: string, hit: AdvisoryHit, pm: PackageManager): string | undefined {
+  if (hit.malware) {
+    return `  → ${pm} remove ${name}@${hit.version} — flagged as malware`;
+  }
+  // Gather fix versions across all advisories (earliest >= current stable version wins)
+  let bestFix: string | undefined;
+  let bestParts: number[] | undefined;
+  const parseVer = (v: string): number[] | undefined => {
+    const m = v.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    return m ? [parseInt(m[1]!, 10), parseInt(m[2]!, 10), parseInt(m[3]!, 10)] : undefined;
+  };
+  const currentParts = parseVer(hit.version);
+  for (const d of hit.advisories ?? []) {
+    for (const fv of d.fixedVersions ?? []) {
+      const parts = parseVer(fv);
+      if (!parts) continue; // skip pre-releases and non-semver versions
+      if (currentParts && (parts[0]! < currentParts[0]! || (parts[0] === currentParts[0] && parts[1]! < currentParts[1]!) || (parts[0] === currentParts[0] && parts[1] === currentParts[1] && parts[2]! <= currentParts[2]!))) continue;
+      if (!bestParts || parts[0]! < bestParts[0]! || (parts[0] === bestParts[0] && parts[1]! < bestParts[1]!) || (parts[0] === bestParts[0] && parts[1] === bestParts[1] && parts[2]! < bestParts[2]!)) {
+        bestFix = fv;
+        bestParts = parts;
+      }
+    }
+  }
+  if (!bestFix) return undefined;
+  if (hit.direct) {
+    return `  → sandbox ${pm} update ${name}  (fix: ${bestFix})`;
+  }
+  // Transitive: suggest overrides
+  switch (pm) {
+    case 'pnpm':
+      return `  → add to pnpm.overrides:  "${name}": "${bestFix}"`;
+    case 'npm':
+      return `  → add to overrides in package.json:  "${name}": "${bestFix}"`;
+    case 'yarn':
+      return `  → add to resolutions in package.json:  "${name}": "${bestFix}"`;
+    case 'bun':
+      return `  → pin transitive: install ${name}@${bestFix} as a direct dependency`;
+  }
+}
+
+function logFixCommands(hits: AdvisoryHit[], pm: PackageManager): void {
+  const deduped = new Map<string, AdvisoryHit>();
+  for (const hit of hits) {
+    const existing = deduped.get(hit.name);
+    if (!existing || (hit.ids.length > existing.ids.length)) deduped.set(hit.name, hit);
+  }
+  const lines: string[] = [];
+  for (const [name, hit] of deduped) {
+    const line = formatFixLine(name, hit, pm);
+    if (line) lines.push(line);
+  }
+  if (lines.length) {
+    log.info(`fix:\n${lines.join('\n')}`);
+  }
+}
+
+function formatAgentScan(result: { scanned: number; lockfileMissing: boolean; blocked: boolean; malware: { name: string; version: string; ids: string[] }[]; knownBadHits: { name: string; version: string; reason: string }[]; hits: AdvisoryHit[]; triaged: AdvisoryHit[]; severityCounts: AdvisorySeverityCounts }, pm: PackageManager): string {
+  const lines: string[] = [];
+  lines.push(`scanned:${result.scanned} blocked:${result.blocked}`);
+  const sc = result.severityCounts;
+  lines.push(`severity:critical=${sc.critical} high=${sc.high} moderate=${sc.moderate} low=${sc.low}`);
+  if (result.triaged.length) lines.push(`triaged:${result.triaged.length}`);
+
+  const grouped = new Map<string, AdvisoryHit[]>();
+  for (const hit of result.hits) {
+    const list = grouped.get(hit.name) ?? [];
+    list.push(hit);
+    grouped.set(hit.name, list);
+  }
+  for (const [name, group] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const hit of group.sort((a, b) => a.version.localeCompare(b.version))) {
+      const sev = highestSeverity(hit.advisories ?? []) ?? 'low';
+      const deps = hit.direct ? 'direct' : hit.direct === false ? 'transitive' : '';
+      const ids = hit.ids.join(',');
+      const fixVersions = [...new Set(hit.advisories?.flatMap((d) => d.fixedVersions ?? []))].join(',');
+      lines.push(`pkg:${hit.name}@${hit.version} ${deps} severity:${sev} malware:${hit.malware} advisories:${ids}${fixVersions ? ` fixed:${fixVersions}` : ''}`);
+    }
+    // Fix command
+    const anyHit = group[0];
+    if (anyHit) {
+      const fixStr: string[] = [];
+      if (anyHit.malware) {
+        fixStr.push(`remove ${name}`);
+      } else {
+        const allFixed = [...new Set(group.flatMap((h) => h.advisories?.flatMap((d) => d.fixedVersions ?? [])))].join(',');
+        if (allFixed) {
+          if (anyHit.direct) {
+            fixStr.push(`update ${name} (sandbox ${pm} update ${name})`);
+          } else {
+            fixStr.push(`override ${name}=${allFixed} (${pm === 'pnpm' ? 'pnpm.overrides' : pm === 'yarn' ? 'resolutions' : 'overrides'})`);
+          }
+        }
+      }
+      if (fixStr.length) lines.push(`fix:${name} ${fixStr.join(' ')}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string): Promise<number> {
+  const isAgent = globals.format === 'agent';
+  const tty = process.stderr.isTTY && !globals.json && !isAgent;
+  const s = tty ? spinner({ output: process.stderr }) : undefined;
+  if (s) s.start('scan: checking installed packages for advisories …');
+  const result = await runScan({
+    pm,
+    cwd,
+    knownBad: loadKnownBad(cwd),
+    onProgress: s ? (done, total) => s.message(`scan: checking ${done}/${total} packages …`) : undefined,
+  });
+  if (s) s.stop('');
+
+  const blocked = result.malware.length > 0 || result.knownBadHits.length > 0;
+
+  if (isAgent) {
+    console.log(formatAgentScan({ scanned: result.scanned, lockfileMissing: result.lockfileMissing, blocked, malware: result.malware, knownBadHits: result.knownBadHits, hits: result.hits, triaged: result.triaged, severityCounts: result.severityCounts }, pm));
+    return blocked ? 1 : 0;
+  }
+
+  if (globals.json) {
+    console.log(
+      JSON.stringify(
+        {
+          scanned: result.scanned,
+          lockfileMissing: result.lockfileMissing,
+          blocked,
+          severityCounts: result.severityCounts,
+          malware: result.malware,
+          knownBadHits: result.knownBadHits,
+          advisories: result.hits.filter((h) => !h.malware),
+          triaged: result.triaged,
+        },
+        null,
+        2,
+      ),
+    );
+    return blocked ? 1 : 0;
+  }
+  if (result.lockfileMissing) {
+    log.warn(`scan: no parseable lockfile for ${pm} — nothing to scan (commit a lockfile; bun has no parser yet)`);
+    return 0;
+  }
+
+  // Summary header
+  const uniqueAffected = new Set(result.hits.map((h) => h.name)).size;
+  logScanSummary(result.severityCounts, uniqueAffected, result.scanned, result.triaged.length);
+
+  // Triaged advisories
+  if (result.triaged.length) {
+    const triagedNames = [...new Set(result.triaged.map((h) => h.name))].sort();
+    log.info(`scan: ${result.triaged.length} advisory hit(s) triaged via .sandbox-audit-ignore (${triagedNames.join(', ')})`);
+  }
+
+  // Advisory details
+  logAdvisoryHits(result.hits);
+  if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
+
+  // Fix commands
+  if (result.hits.length) logFixCommands(result.hits, pm);
+
+  if (blocked) {
+    if (result.malware.length) log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
+    if (result.knownBadHits.length) log.error(`scan: ${result.knownBadHits.length} installed package(s) match your blocklist/feeds (scanned ${result.scanned})`);
+    return 1;
+  }
+  log.info(`scan: clean — no installed package is currently flagged as malware or blocklisted (scanned ${result.scanned})`);
+  return 0;
 }
 
 /** Report blocklist / malware-feed matches. These are an explicit team decision, so they always block. */
@@ -534,7 +753,6 @@ interface ActivePolicy {
   policy: PreflightPolicy;
 }
 
-/** Resolve the active gate policy once, so the install path and the `preflight` command agree. */
 function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route): ActivePolicy {
   const riskLevel = globals.risk ?? config.install.riskHints;
   const riskHints = riskLevel !== 'off';
@@ -562,21 +780,14 @@ function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route): A
   };
 }
 
-/** The deprecated-version findings (a maintainer-flagged version we must never install). */
 function deprecatedHints(result: PreflightResult): RiskHint[] {
   return result.hints.filter((h) => h.code === 'deprecated');
 }
 
-/** No gate is active — nothing to resolve or check. */
 function nothingToCheck(ap: ActivePolicy): boolean {
   return !ap.riskHints && !ap.failOnAdvisory && ap.minReleaseAgeDays === 0;
 }
 
-/**
- * The blocking decision, pure over the findings. Precedence matches the install gate: release-age
- * first (the strongest control), then known malware, then deprecated versions (blocked by default),
- * then risk hints under `--fail-on-risk`. Returns the exit code to block with, or undefined to proceed.
- */
 function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefined {
   if (result.knownBadHits.length) return 1;
   if (result.ageViolations.length) return 1;
@@ -586,12 +797,6 @@ function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefine
   return undefined;
 }
 
-/**
- * Log the deprecated-version gate. Deprecated versions are abandoned (no security fixes, a standing
- * supply-chain risk), so the default is to BLOCK — and the message says how to override. When the
- * user has explicitly allowed them (`--allow-deprecated`), they're downgraded to a warning. Returns
- * the blocking exit code, or undefined to proceed.
- */
 function logDeprecatedGate(hints: RiskHint[], failOnDeprecated: boolean): number | undefined {
   if (!hints.length) return undefined;
   const list = hints.map((h) => `  ${h.package}${h.version ? `@${h.version}` : ''} — ${h.message}`);
@@ -723,40 +928,6 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
   if (exit) log.error('preflight: would BLOCK this install — resolve the findings above, or re-run with an override flag');
   else log.info('preflight: no blocking findings — safe to install');
   return exit;
-}
-
-/**
- * `sandbox scan` — RETROACTIVE malware sweep over the committed lockfile. Where preflight gates what
- * an install WOULD pull, scan re-checks what's ALREADY pinned, so a dependency OSV flagged *after*
- * you installed it is caught on the next run (CI/cron). Malware blocks (exit 1); other advisories are
- * reported as warnings. Network-only (no container); fails open per package on an OSV error.
- */
-async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string): Promise<number> {
-  const result = await runScan({ pm, cwd, knownBad: loadKnownBad(cwd) });
-  const blocked = result.malware.length > 0 || result.knownBadHits.length > 0;
-  if (globals.json) {
-    console.log(
-      JSON.stringify(
-        { scanned: result.scanned, lockfileMissing: result.lockfileMissing, blocked, malware: result.malware, knownBadHits: result.knownBadHits, advisories: result.hits.filter((h) => !h.malware) },
-        null,
-        2,
-      ),
-    );
-    return blocked ? 1 : 0;
-  }
-  if (result.lockfileMissing) {
-    log.warn(`scan: no parseable lockfile for ${pm} — nothing to scan (commit a lockfile; bun has no parser yet)`);
-    return 0;
-  }
-  logAdvisoryHits(result.hits);
-  if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
-  if (blocked) {
-    if (result.malware.length) log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
-    if (result.knownBadHits.length) log.error(`scan: ${result.knownBadHits.length} installed package(s) match your blocklist/feeds (scanned ${result.scanned})`);
-    return 1;
-  }
-  log.info(`scan: clean — no installed package is currently flagged as malware or blocklisted (scanned ${result.scanned}${result.hits.length ? `; ${result.hits.length} non-malware advisory hint(s) above` : ''})`);
-  return 0;
 }
 
 /**

@@ -100,6 +100,14 @@ function readDirectDependencies(cwd: string): DirectDependency[] {
   }
 }
 
+/**
+ * Returns just the package names from the root manifest's direct dependencies
+ * (deps + devDeps + optionalDeps), for scan's direct-vs-transitive tagging.
+ */
+export function readDirectDependencyNames(cwd: string): string[] {
+  return readDirectDependencies(cwd).map((d) => d.name);
+}
+
 function unquote(value: string): string {
   const v = value.trim();
   return (v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")) ? v.slice(1, -1) : v;
