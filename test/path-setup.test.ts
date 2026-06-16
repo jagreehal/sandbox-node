@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -73,6 +74,41 @@ describe('wrapper / dispatch consistency', () => {
       for (const verb of FETCH_RUN_VERBS) expect(body, `${shell}:${verb}`).toContain(verb);
       // pnpx is wrapped as a standalone runner alongside npx/bunx.
       expect(body, `${shell}:pnpx`).toContain('pnpx');
+    }
+  });
+});
+
+describe('global installs bypass the sandbox (-g is host tooling)', () => {
+  // The bug: `npm install -g foo` routed through the wrapper ran the install INSIDE the ephemeral
+  // container, so nothing landed on the host. A global install must pass straight through.
+  function runBashWrapper(line: string): string {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-g-'));
+    for (const [name, marker] of [['npm', 'REAL-NPM'], ['sandbox', 'SANDBOX']] as const) {
+      const f = path.join(dir, name);
+      writeFileSync(f, `#!/bin/sh\necho "${marker}: $*"\n`);
+      chmodSync(f, 0o755);
+    }
+    const script = `export PATH="${dir}:$PATH"\n${renderWrapperBody('bash')}\n${line}\n`;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+  }
+
+  it('routes a normal install but passes a -g install through to the real tool', () => {
+    expect(runBashWrapper('npm install lodash')).toContain('SANDBOX:');
+    const g = runBashWrapper('npm install -g typescript');
+    expect(g).toContain('REAL-NPM: install -g typescript');
+    expect(g).not.toContain('SANDBOX:');
+  });
+
+  it('also bypasses --global and --location=global', () => {
+    expect(runBashWrapper('npm i --global typescript')).toContain('REAL-NPM:');
+    expect(runBashWrapper('npm install --location=global typescript')).toContain('REAL-NPM:');
+  });
+
+  it('every dialect carries the global-bypass guard', () => {
+    for (const shell of ['bash', 'fish', 'pwsh'] as const) {
+      const body = renderWrapperBody(shell);
+      expect(body, `${shell}:--global`).toContain('--global');
+      expect(body, `${shell}:--location=global`).toContain('--location=global');
     }
   });
 });
