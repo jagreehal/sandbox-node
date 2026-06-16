@@ -51,7 +51,17 @@ function packageManagerFromManifest(cwd: string): PackageManager | undefined {
   const file = path.join(cwd, 'package.json');
   if (!existsSync(file)) return undefined;
   try {
-    return parsePackageManagerField(JSON.parse(readFileSync(file, 'utf8')).packageManager)?.name;
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    // Standard `packageManager` field (e.g. "pnpm@11.5.3")
+    const fromPm = parsePackageManagerField(raw.packageManager);
+    if (fromPm) return fromPm.name;
+    // devEngines spec (e.g. { "packageManager": { "name": "pnpm" } })
+    const dePm = raw.devEngines?.packageManager;
+    if (dePm && typeof dePm.name === 'string') {
+      const name = dePm.name.toLowerCase();
+      if (name === 'npm' || name === 'pnpm' || name === 'yarn' || name === 'bun') return name;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
