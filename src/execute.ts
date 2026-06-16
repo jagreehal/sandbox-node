@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createBackend, type ContainerBackend, type RunOverride } from './backend.js';
 import { scanCanaryLog, type Canary } from './canary.js';
 import { log } from './log.js';
+import { findHostIncompatiblePackagesInWorkspace, hostPlatform } from './native-deps.js';
 import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
 import { appendAudit } from './receipt.js';
@@ -130,6 +131,17 @@ export async function execute(
       }
       if (wroteProjectLocalPnpmStore(before, after)) {
         log.info('pnpm created a project-local store (.pnpm-store/). Run later commands through `sandbox` to reuse it as-is; running pnpm directly on the host rebuilds node_modules against the host store.');
+      }
+      // The install ran on Linux; native optional deps resolve for that platform.
+      // On a macOS/Windows host those binaries can't load — warn before the
+      // host's own toolchain (vite/vitest/tsx) fails with a cryptic missing-module error.
+      const foreignNative = findHostIncompatiblePackagesInWorkspace(workspaceRoot, hostPlatform());
+      if (foreignNative.length) {
+        log.warn(`${foreignNative.length} native package(s) were installed for the Linux sandbox and won't load on your ${process.platform} host`, {
+          packages: foreignNative.slice(0, 8),
+          truncated: foreignNative.length > 8,
+        });
+        log.info('Run project tools through sandbox so they execute on the same platform (e.g. `sandbox test`, `sandbox dev`). For host-native dev, run your package-manager install on the host to add its binaries.');
       }
     }
     cleanupBlockerMountpoints(plan);

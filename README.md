@@ -59,6 +59,15 @@ content store in the project (`.pnpm-store/`). The resulting `node_modules` is t
 store, so run later commands through `sandbox` to reuse it as-is. Running pnpm directly on the host
 rebuilds `node_modules` against the host's own store.
 
+native-deps note: installs run on Linux, so package managers fetch the **Linux** build of any
+platform-specific native optional dependency (`@rollup/rollup-linux-*`, `@esbuild/linux-*`,
+`@img/sharp-linux-*`, `lightningcss`, `@swc/core`, …). On a macOS or Windows host those binaries
+can't load, so host-side tools (`vite`, `vitest`, `tsx`) fail with e.g. *Cannot find module
+`@rollup/rollup-darwin-arm64`*. After an install on a non-Linux host, `sandbox` detects this and warns
+with the offending packages. Two fixes: keep running through `sandbox` (`sandbox test`, `sandbox dev`)
+so tools execute on the same Linux platform, or run a plain install on the host once to add its native
+binaries for host-side dev.
+
 Anything that pulls *new* versions is gated the same way as install: the release-age cooldown, OSV
 malware check, and risk hints resolve against the versions the command would pull, so a
 freshly-published malicious bump is caught before it's fetched:
