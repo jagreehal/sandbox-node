@@ -18,6 +18,8 @@ import { renderPlanSummary } from './dryrun.js';
 import { routePassthrough, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
 import { execute } from './execute.js';
+import { classifyCommand } from './tamper.js';
+import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
 import { runInit } from './init.js';
 import { log } from './log.js';
 import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
@@ -75,6 +77,8 @@ interface Globals {
   noUpdateCheck: boolean;
   /** Widen egress to the curated native-build/release hosts for this run (--allow-build-hosts). */
   allowBuildHosts: boolean;
+  /** Approve every ignored dependency build script without prompting (--allow-all-builds). */
+  allowAllBuilds: boolean;
 }
 
 const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
@@ -119,6 +123,9 @@ Sandbox commands:
                        globals, --preset/--backend/--risk). \`sandbox path install\` already wires
                        this in; use this to install it on its own, e.g. for zsh:
                        \`sandbox completion zsh > "\${fpath[1]}/_sandbox"\`.
+  approve-builds [pkg]  approve dependency build scripts pnpm left ignored (writes allowBuilds +
+                       onlyBuiltDependencies, then re-installs). No args = approve all pending;
+                       --deny records the opposite. Install also prompts on a TTY automatically.
   preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
                        command would pull, print every finding (+ a pin suggestion per blocked
                        package), and exit non-zero exactly when that install would be blocked.
@@ -217,6 +224,7 @@ Globals (before the command):
                        are blocked). Rides on risk hints, so --risk off also disables it.
   --full-network       scarier escape hatch: run this once with full network (no egress
                        allowlist); with run/shell it also enables common dev ports
+  --allow-all-builds   approve every ignored dependency build script without prompting (CI/agents)
   --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
                        Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
   --dry-run            preview what would be mounted, allowed, and run — then stop (human-readable)
@@ -246,6 +254,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     interactive: false,
     noUpdateCheck: false,
     allowBuildHosts: false,
+    allowAllBuilds: false,
   };
   let i = 0;
   for (; i < argv.length; i++) {
@@ -287,6 +296,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     else if (a === '--no-canaries') globals.canaries = false;
     else if (a === '--no-update-check') globals.noUpdateCheck = true;
     else if (a === '--allow-build-hosts') globals.allowBuildHosts = true;
+    else if (a === '--allow-all-builds') globals.allowAllBuilds = true;
     else break;
   }
   return { globals, cmd: argv[i], args: argv.slice(i + 1) };
@@ -1516,8 +1526,38 @@ async function main(): Promise<number> {
     const wantCanaries = globals.canaries ?? config.install.canaries;
     const canary = wantCanaries && networkPolicy(plan.network).useEgressProxy ? makeCanary() : undefined;
     if (wantCanaries && !canary) log.info(`canaries requested but inactive here — they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
+    let buildApprovalTries = 0;
     for (;;) {
       const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+      // pnpm refuses unknown dependency build scripts, records them under `allowBuilds:` in
+      // pnpm-workspace.yaml as undecided, and exits non-zero. Resolve that here so the user never
+      // hand-edits YAML: prompt on a TTY, auto-approve with --allow-all-builds, else print the
+      // one-liner — then re-run so the approved scripts actually build.
+      if (facts.pm === 'pnpm' && classifyCommand(plan.argv) !== 'other' && buildApprovalTries < 3) {
+        const pending = findPendingBuilds(context.rootDir);
+        if (pending.length) {
+          buildApprovalTries++;
+          if (globals.allowAllBuilds) {
+            const r = writeBuildApprovals(context.rootDir, new Map(pending.map((n) => [n, true])));
+            log.info(`approved build scripts (contained in the sandbox): ${r.allowed.join(', ')} — re-running install`);
+            continue;
+          }
+          const ttyPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !globals.json && !globals.dryRun;
+          if (ttyPrompt) {
+            const decisions = await promptBuildApprovals(pending);
+            if (decisions) {
+              const r = writeBuildApprovals(context.rootDir, decisions);
+              const parts = [r.allowed.length ? `allowed ${r.allowed.join(', ')}` : '', r.denied.length ? `denied ${r.denied.join(', ')}` : ''].filter(Boolean);
+              log.info(`updated pnpm-workspace.yaml (${parts.join('; ')}) — re-running install`);
+              continue;
+            }
+          }
+          log.warn(`${pending.length} package(s) want to run install scripts but aren't approved yet: ${pending.join(', ')}`);
+          log.info(`approve (contained in the sandbox) and re-install:  ${renderApproveBuildsCommand(pending)}`);
+          log.info('or approve all without prompting:  add --allow-all-builds to your install');
+          return result.code === 0 ? 1 : result.code;
+        }
+      }
       if (!result.deniedHosts.length || !canPrompt) return result.code;
       const deniedHosts = [...new Set(result.deniedHosts)].sort();
       const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });
@@ -1534,6 +1574,28 @@ async function main(): Promise<number> {
       plan = retry;
     }
   };
+
+  if (cmd === 'approve-builds') {
+    // Resolve pnpm's ignored dependency build scripts without hand-editing YAML. With no package
+    // names, approves everything pnpm left pending; names can also pre-approve specific packages.
+    // `--deny` records the opposite decision (don't build) so pnpm stops re-prompting.
+    if (facts.pm !== 'pnpm') {
+      log.warn(`approve-builds resolves pnpm's ignored build scripts; this project uses ${facts.pm}`);
+      return 0;
+    }
+    const named = args.filter((a) => !a.startsWith('-'));
+    const deny = args.includes('--deny') || args.includes('--none');
+    const targets = named.length ? named : findPendingBuilds(context.rootDir);
+    if (!targets.length) {
+      log.info('no dependency build scripts are awaiting approval');
+      return 0;
+    }
+    const r = writeBuildApprovals(context.rootDir, new Map(targets.map((n) => [n, !deny])));
+    log.info(`${deny ? 'denied' : 'approved'} build scripts: ${(deny ? r.denied : r.allowed).join(', ')}`);
+    if (deny) return 0;
+    log.info('re-running install so the approved scripts build');
+    return emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
+  }
 
   if (cmd === 'delta') {
     return runDeltaCommand(globals, config, facts, context.rootDir, args);

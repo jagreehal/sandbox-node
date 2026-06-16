@@ -109,8 +109,12 @@ export function protectionMounts(facts: ProjectFacts, config: SandboxConfig, opt
   return mounts;
 }
 
-function baseEnv(config: SandboxConfig, facts: ProjectFacts, opts: PlanOptions): Record<string, string> {
-  const env: Record<string, string> = { SANDBOX: '1', CI: '', HOME: CONTAINER_HOME };
+function baseEnv(config: SandboxConfig, facts: ProjectFacts, opts: PlanOptions, ci: boolean): Record<string, string> {
+  // An install/audit container has no TTY, so it must present as CI — otherwise pnpm assumes it can
+  // prompt (e.g. to confirm a node_modules purge) and aborts the whole install with
+  // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY, so the lockfile never gets written. Dev/run plans
+  // stay interactive (CI='') so a real TTY can still drive prompts and CI-sensitive tooling behaves.
+  const env: Record<string, string> = { SANDBOX: '1', CI: ci ? '1' : '', HOME: CONTAINER_HOME };
   if (config.grants['ssh-agent']) env.SSH_AUTH_SOCK = '/ssh-agent';
   Object.assign(env, facts.envFileValues);
   for (const name of new Set([...config.grants.env, ...(opts.envNames ?? [])])) {
@@ -130,12 +134,15 @@ function effectiveEgressAllow(config: SandboxConfig, pm: PackageManager): string
   return pmHost && !config.egress.allow.includes(pmHost) ? [...config.egress.allow, pmHost] : config.egress.allow;
 }
 
-function commonPlan(config: SandboxConfig, facts: ProjectFacts, network: NetworkMode, opts: PlanOptions): Omit<RunPlan, 'argv' | 'mounts' | 'ports' | 'interactive' | 'workdir'> {
-  const image = opts.image ?? config.image;
+function commonPlan(config: SandboxConfig, facts: ProjectFacts, network: NetworkMode, opts: PlanOptions, ci: boolean): Omit<RunPlan, 'argv' | 'mounts' | 'ports' | 'interactive' | 'workdir'> {
+  const requested = opts.image ?? config.image;
+  const build = resolveBuildSpec(config, requested, facts.cwd);
   return {
-    image,
-    build: resolveBuildSpec(config, image, facts.cwd),
-    env: baseEnv(config, facts, opts),
+    // Run the exact tag the spec resolved to (per-fingerprint for the managed image), so the
+    // container we run is the one we build/inspect — not a shared `:latest` that another project rebuilt.
+    image: build.tag,
+    build,
+    env: baseEnv(config, facts, opts, ci),
     network,
     egressAllow: effectiveEgressAllow(config, facts.pm),
     capDrop: ['ALL'],
@@ -196,7 +203,7 @@ export function planInstall(config: SandboxConfig, facts: ProjectFacts, args: st
   const frozen = opts.frozen ?? config.install.frozen;
   const fullReadOnly = frozen && facts.pm !== 'pnpm';
   return {
-    ...commonPlan(config, facts, config.install.network, opts),
+    ...commonPlan(config, facts, config.install.network, opts, true),
     workdir: WORKSPACE_ROOT, // install always runs at the root, never a sub-dir
     argv: frozen ? frozenInstallArgv(facts.pm, facts.isYarnBerry, args) : pmArgv(facts.pm, 'install', args),
     mounts: installMounts(config, facts, { frozen, fullReadOnly }),
@@ -228,7 +235,7 @@ function installMounts(config: SandboxConfig, facts: ProjectFacts, { frozen, ful
 
 function planInstallClassMutation(config: SandboxConfig, facts: ProjectFacts, argv: string[], opts: PlanOptions = {}): RunPlan {
   return {
-    ...commonPlan(config, facts, config.install.network, opts),
+    ...commonPlan(config, facts, config.install.network, opts, true),
     workdir: WORKSPACE_ROOT,
     argv,
     mounts: [workspace(facts.cwd), ...protectionMounts(facts, config, { protectManifest: false }), ...cacheMounts(config, facts), ...grantMounts(facts, config, { claudeReadonly: true })],
@@ -266,7 +273,7 @@ export function planAuditFix(config: SandboxConfig, facts: ProjectFacts, argv: s
  */
 function planRegistryAudit(config: SandboxConfig, facts: ProjectFacts, argv: string[], opts: PlanOptions = {}): RunPlan {
   return {
-    ...commonPlan(config, facts, config.install.network, opts),
+    ...commonPlan(config, facts, config.install.network, opts, true),
     workdir: opts.workdir ?? WORKSPACE_ROOT,
     argv,
     mounts: [{ type: 'bind', source: facts.cwd, target: WORKSPACE_ROOT, readonly: true }, ...grantMounts(facts, config, { claudeReadonly: true })],
@@ -288,7 +295,7 @@ export function planAuditSignatures(config: SandboxConfig, facts: ProjectFacts, 
 /** Dev loop: full read-write tree, ports, default no-network. `argv` is your command. */
 export function planRun(config: SandboxConfig, facts: ProjectFacts, argv: string[], opts: PlanOptions = {}): RunPlan {
   const plan: RunPlan = {
-    ...commonPlan(config, facts, config.run.network, opts),
+    ...commonPlan(config, facts, config.run.network, opts, false),
     workdir: opts.workdir ?? WORKSPACE_ROOT, // run/shell honour the invocation sub-dir
     argv,
     mounts: [workspace(facts.cwd), ...runCacheMounts(config, argv), ...grantMounts(facts, config)],

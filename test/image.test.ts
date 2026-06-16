@@ -12,6 +12,8 @@ import {
   extraStepsNeedRepoContext,
   hasExtraLayer,
   isCustomBuild,
+  MANAGED_IMAGE,
+  MANAGED_IMAGE_REPO,
   resolveBaseImage,
   resolveBuildSpec,
   specFingerprint,
@@ -170,5 +172,26 @@ describe('resolveBuildSpec — package manager baking', () => {
 
   it('adds no step when the project package.json is unreadable', () => {
     expect(resolveBuildSpec(configWith(), 'tag', CTX).extraSteps).toEqual([]);
+  });
+});
+
+describe('per-fingerprint managed image tag', () => {
+  it('derives a per-fingerprint tag for the built-in managed image', () => {
+    const spec = resolveBuildSpec(configWith(), MANAGED_IMAGE, CTX);
+    expect(spec.tag).toMatch(new RegExp(`^${MANAGED_IMAGE_REPO}:[0-9a-f]{16}$`));
+  });
+
+  it('honours a custom/explicit image name verbatim', () => {
+    expect(resolveBuildSpec(configWith(), 'my-image:1', CTX).tag).toBe('my-image:1');
+  });
+
+  it('gives different build configs different tags, so projects do not clobber one shared image', () => {
+    const a = resolveBuildSpec(configWith(), MANAGED_IMAGE, CTX).tag;
+    const b = resolveBuildSpec(configWith({ nodeVersion: '20' }), MANAGED_IMAGE, CTX).tag;
+    expect(a).not.toBe(b);
+  });
+
+  it('is deterministic for the same config (stable reuse across runs)', () => {
+    expect(resolveBuildSpec(configWith(), MANAGED_IMAGE, CTX).tag).toBe(resolveBuildSpec(configWith(), MANAGED_IMAGE, CTX).tag);
   });
 });

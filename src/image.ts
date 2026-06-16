@@ -12,6 +12,15 @@ import { parsePackageManagerField } from './package-manager.js';
  */
 export const DEFAULT_BASE_IMAGE = 'node:24-bookworm-slim';
 
+/** Repo name for the built-in managed image (the part before the tag). */
+export const MANAGED_IMAGE_REPO = 'node-install-sandbox';
+/**
+ * The built-in default `config.image`. When this is the requested image we derive a
+ * per-fingerprint tag (see {@link resolveBuildSpec}); any other image name is honoured verbatim
+ * because the user chose it. Kept in sync with the default in `config.ts`.
+ */
+export const MANAGED_IMAGE = `${MANAGED_IMAGE_REPO}:latest`;
+
 /** Markers a full-replacement Dockerfile must keep, or the boundary it promises is hollow. */
 const REQUIRED_MARKERS: { needle: string; missing: string }[] = [
   { needle: 'sbx-net-guard', missing: "the metadata guard (sbx-net-guard) — 'on'/full-network mode will NOT blackhole cloud metadata (169.254.169.254)" },
@@ -86,7 +95,7 @@ function readPackageManagerField(dir: string): unknown {
 export function resolveBuildSpec(config: SandboxConfig, tag: string, contextDir: string): BuildSpec {
   const b = config.build;
   const pmStep = corepackPrepareStep(readPackageManagerField(contextDir));
-  return {
+  const spec: BuildSpec = {
     tag,
     baseImage: resolveBaseImage(b),
     extraPackages: b.extraPackages,
@@ -95,6 +104,16 @@ export function resolveBuildSpec(config: SandboxConfig, tag: string, contextDir:
     buildContext: contextDir,
     customDockerfile: b.customDockerfileUnsafe ? path.resolve(b.customDockerfileUnsafe) : undefined,
   };
+  // For the built-in managed image, derive a per-fingerprint tag so projects with different package
+  // managers / build configs each get their OWN cached image — instead of every project sharing one
+  // `:latest` that gets rebuilt and re-tagged on each switch. That churn used to flip the baked pnpm
+  // version between projects, which then made a project's existing node_modules look foreign and
+  // triggered a (no-TTY-fatal) reinstall purge. A stable per-fingerprint tag removes the flip
+  // entirely. Custom/explicit images are honoured verbatim — the user named that image on purpose.
+  if (tag === MANAGED_IMAGE) {
+    spec.tag = `${MANAGED_IMAGE_REPO}:${specFingerprint(spec)}`;
+  }
+  return spec;
 }
 
 /** Image label that records which build spec produced an image (drives rebuild-on-change). */

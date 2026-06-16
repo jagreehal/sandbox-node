@@ -11,7 +11,13 @@ export const SandboxConfigSchema = z
   .object({
     /** Editor JSON Schema reference (enables autocomplete/validation in the config file). */
     $schema: z.string().optional(),
-    /** Image tag for the sandbox container (override per project if needed). */
+    /**
+     * Image tag for the sandbox container. The default is the built-in managed image: it's resolved
+     * to a per-fingerprint tag at build time (see `MANAGED_IMAGE` in image.ts), so projects with
+     * different package managers / build configs don't clobber one shared `:latest`. Override with a
+     * custom name to pin your own image — custom names are used verbatim. Keep this literal in sync
+     * with `MANAGED_IMAGE`.
+     */
     image: z.string().default('node-install-sandbox:latest'),
     /** Check npm for a newer `sandbox` once a day and print a notice (set false to opt the project out). */
     updateCheck: z.boolean().default(true),

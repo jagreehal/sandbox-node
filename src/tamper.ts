@@ -57,7 +57,8 @@ export function snapshotTree(root: string): TreeSnapshot {
 
 export function classifyCommand(argv: string[]): CommandKind {
   if (argv.includes('add')) return 'add';
-  if (argv.includes('install') || argv.includes('ci')) return 'install';
+  if (argv.includes('install') || argv.includes('ci') || argv.includes('update') || argv.includes('up')) return 'install';
+  if (argv.includes('audit') && argv.some((arg) => arg === 'fix' || arg === '--fix' || arg.startsWith('--fix='))) return 'install';
   return 'other';
 }
 
@@ -66,6 +67,10 @@ function isExpectedProjectWrite(rel: string, kind: CommandKind): boolean {
   if (kind === 'other') return false;
   if (kind === 'add' && file === 'package.json') return true;
   if (file === 'package-lock.json' || file === 'pnpm-lock.yaml' || file === 'yarn.lock' || file === 'npm-shrinkwrap.json') return true;
+  // pnpm manages its own settings in pnpm-workspace.yaml during install — it records build-script
+  // approvals (allowBuilds) and release-age exclusions (minimumReleaseAgeExclude) there. Those are
+  // expected install writes, not tampering, so flagging them just trains people to ignore the warning.
+  if (file === 'pnpm-workspace.yaml') return true;
   if (file === '.pnp.cjs' || file === '.pnp.loader.mjs') return true;
   if (file === '.yarn/install-state.gz' || file === '.yarn/build-state.yml') return true;
   if (file.startsWith('.yarn/cache/') || file.startsWith('.yarn/unplugged/')) return true;

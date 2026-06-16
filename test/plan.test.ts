@@ -359,3 +359,16 @@ describe('renderRunArgs', () => {
     }
   });
 });
+
+describe('CI env (non-interactive install containers)', () => {
+  it('marks install/add/update/audit-fix plans as CI so pnpm never aborts on a no-TTY purge', () => {
+    expect(planInstall(cfg(), facts({ pm: 'pnpm' })).env.CI).toBe('1');
+    expect(planAdd(cfg(), facts({ pm: 'pnpm' }), ['zod']).env.CI).toBe('1');
+    expect(planUpdate(cfg(), facts({ pm: 'pnpm' }), ['pnpm', 'up']).env.CI).toBe('1');
+    expect(planAuditFix(cfg(), facts({ pm: 'pnpm' }), ['pnpm', 'audit', '--fix']).env.CI).toBe('1');
+  });
+
+  it('leaves interactive run/dev plans non-CI so a real TTY can still drive prompts', () => {
+    expect(planRun(cfg(), facts(), ['test']).env.CI).toBe('');
+  });
+});

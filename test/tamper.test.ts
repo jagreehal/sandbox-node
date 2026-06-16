@@ -6,9 +6,11 @@ function snap(files: Record<string, string>): TreeSnapshot {
 }
 
 describe('classifyCommand', () => {
-  it('classifies install and add plans', () => {
+  it('classifies install-class and add plans', () => {
     expect(classifyCommand(['npm', 'install'])).toBe('install');
     expect(classifyCommand(['corepack', 'pnpm', 'add', 'zod'])).toBe('add');
+    expect(classifyCommand(['corepack', 'pnpm', 'up'])).toBe('install');
+    expect(classifyCommand(['corepack', 'pnpm', 'audit', '--fix'])).toBe('install');
     expect(classifyCommand(['node', 'server.js'])).toBe('other');
   });
 });
@@ -36,6 +38,12 @@ describe('summarizeUnexpectedChanges', () => {
     const after = snap({ 'package.json': 'b' });
     expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual(['package.json']);
     expect(summarizeUnexpectedChanges(before, after, 'add')).toEqual([]);
+  });
+
+  it('treats pnpm-workspace.yaml edits as expected install writes (allowBuilds / minimumReleaseAgeExclude)', () => {
+    const before = snap({ 'package.json': 'a', 'pnpm-workspace.yaml': 'packages:\n' });
+    const after = snap({ 'package.json': 'a', 'pnpm-workspace.yaml': 'packages:\nallowBuilds:\n  esbuild: true\n' });
+    expect(summarizeUnexpectedChanges(before, after, 'install')).toEqual([]);
   });
 
   it("treats pnpm's project-local store as an expected install artifact", () => {
