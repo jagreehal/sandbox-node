@@ -103,3 +103,16 @@ export function routePassthrough(argv: string[]): Route | undefined {
   if (RUN_LEADERS.has(leader)) return { model: 'run', argv };
   return undefined;
 }
+
+/**
+ * True for a global install across any package manager — a host-tooling action a container can't
+ * perform (a `-g` install in an ephemeral container installs nothing on the host). npm/pnpm/bun use
+ * a flag (`-g` / `--global` / `--location=global`); yarn classic uses a `global` subcommand
+ * (`yarn global add …`), which routes to `run`, so match it explicitly on the leading token.
+ */
+export function isGlobalInstall(cmd: string, route: Route, args: string[]): boolean {
+  const installClass = route.model === 'install' || route.model === 'add' || route.model === 'update';
+  if (installClass && args.some((a) => a === '-g' || a === '--global' || a === '--location=global')) return true;
+  if (cmd === 'yarn' && args[0] === 'global') return true;
+  return false;
+}

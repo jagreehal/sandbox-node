@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routePassthrough, type Route } from '../src/dispatch.js';
+import { isGlobalInstall, routePassthrough, type Route } from '../src/dispatch.js';
 
 const route = (cmd: string): Route | undefined => routePassthrough(cmd.split(' ').filter(Boolean));
 
@@ -133,5 +133,33 @@ describe('routePassthrough — not a pass-through', () => {
     expect(route('claude')).toBeUndefined();
     expect(route('frobnicate the widgets')).toBeUndefined();
     expect(route('')).toBeUndefined();
+  });
+});
+
+describe('isGlobalInstall — global installs across every package manager', () => {
+  // (cmd, args) mirrors how `main()` calls it: cmd is the leading token, args is everything after.
+  const isGlobal = (cmd: string, rest: string) => {
+    const args = rest.split(' ').filter(Boolean);
+    return isGlobalInstall(cmd, routePassthrough([cmd, ...args])!, args);
+  };
+
+  it('flags -g / --global / --location=global for npm, pnpm, bun', () => {
+    expect(isGlobal('npm', 'install -g typescript')).toBe(true);
+    expect(isGlobal('npm', 'i --global typescript')).toBe(true);
+    expect(isGlobal('npm', 'install --location=global typescript')).toBe(true);
+    expect(isGlobal('pnpm', 'add -g typescript')).toBe(true);
+    expect(isGlobal('pnpm', 'add --global typescript')).toBe(true);
+    expect(isGlobal('bun', 'add -g typescript')).toBe(true);
+  });
+
+  it('flags yarn classic global subcommand (routes to run, not an install flag)', () => {
+    expect(isGlobal('yarn', 'global add typescript')).toBe(true);
+  });
+
+  it('leaves normal (local) installs alone', () => {
+    expect(isGlobal('npm', 'install lodash')).toBe(false);
+    expect(isGlobal('pnpm', 'add zod')).toBe(false);
+    expect(isGlobal('bun', 'install')).toBe(false);
+    expect(isGlobal('yarn', 'add react')).toBe(false);
   });
 });

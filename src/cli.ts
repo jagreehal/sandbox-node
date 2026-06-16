@@ -15,7 +15,7 @@ import { resolveBuildSpec } from './image.js';
 import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
-import { routePassthrough, type Route } from './dispatch.js';
+import { isGlobalInstall, routePassthrough, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
 import { execute } from './execute.js';
 import { classifyCommand } from './tamper.js';
@@ -184,6 +184,7 @@ Expert (explicit) commands — same models the pass-through maps onto:
                        and saves them as exact versions by default
   run -- <cmd...>      run a command in the container (network: none by default)
   shell                interactive shell in the container
+  version              print the installed sandbox version (also -v / --version)
 
 Globals (before the command):
   --config <path>      use a specific sandbox.config.json
@@ -1282,6 +1283,11 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (cmd === 'version' || cmd === '--version' || cmd === '-v' || cmd === '-V') {
+    process.stdout.write(`${selfVersion() ?? 'unknown'}\n`);
+    return 0;
+  }
+
   if (cmd === 'completion') {
     const shell = args.find((a) => !a.startsWith('-'));
     if (!shell) fail(`usage: sandbox completion <${COMPLETION_SHELLS.join('|')}>`);
@@ -1616,6 +1622,13 @@ async function main(): Promise<number> {
   }
 
   const route = resolveCommand(cmd, args, facts);
+  // A global install is host tooling — running it in an ephemeral container installs nothing on the
+  // host, so refuse with guidance rather than silently no-op (the path wrappers also pass these through).
+  if (isGlobalInstall(cmd, route, args)) {
+    log.warn('global installs run on the host, not in the sandbox — a -g install in an ephemeral container installs nothing on your machine');
+    log.info(`run it on the host instead:  command ${cmd} ${args.join(' ')}    (or: SANDBOX_OFF=1 ${cmd} ${args.join(' ')})`);
+    return 1;
+  }
   const blocked = await preflightRoute(globals, config, facts, route);
   if (blocked !== undefined) return blocked;
   return emit(planForRoute(route, config, facts, opts));

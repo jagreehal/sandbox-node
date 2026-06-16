@@ -22,7 +22,7 @@ export type Shell = 'zsh' | 'bash' | 'fish' | 'pwsh';
 export const SHELLS: readonly Shell[] = ['zsh', 'bash', 'fish', 'pwsh'];
 
 /** Bump when the managed block changes, so `sandbox path status` can flag a stale installed block. */
-export const PATH_WRAPPER_VERSION = 2;
+export const PATH_WRAPPER_VERSION = 3;
 
 const MARKER_BEGIN = '# >>> sandbox path (managed block — edit via `sandbox path`, not by hand) >>>';
 const MARKER_END = '# <<< sandbox path <<<';
@@ -107,6 +107,8 @@ function posixBody(): string {
     '__sandbox_pm() {',
     '  local pm=$1; shift',
     '  if [ -n "${SANDBOX_OFF:-}" ] || ! command -v sandbox >/dev/null 2>&1; then command "$pm" "$@"; return; fi',
+    '  # Global installs are host tooling — never sandbox them (a -g install in an ephemeral container does nothing on the host).',
+    '  local a; for a in "$@"; do case "$a" in -g|--global|--location=global) command "$pm" "$@"; return ;; esac; done',
     '  local verb=${1:-}',
     '  if [ "$pm" = yarn ] && [ -z "$verb" ]; then __sandbox_go yarn; return; fi',
     '  case "$pm $verb" in',
@@ -154,6 +156,10 @@ function fishBody(): string {
     '    if set -q SANDBOX_OFF; or not command -v sandbox >/dev/null 2>&1',
     '        command $pm $argv; return',
     '    end',
+    '    # Global installs are host tooling — never sandbox them.',
+    '    for __a in $argv',
+    '        switch $__a; case -g --global --location=global; command $pm $argv; return; end',
+    '    end',
     '    set -l verb ""',
     '    if test (count $argv) -ge 1; set verb $argv[1]; end',
     '    if test "$pm" = yarn; and test -z "$verb"; __sandbox_go yarn; return; end',
@@ -200,6 +206,8 @@ function pwshBody(): string {
     '  param([string]$Pm, [Parameter(ValueFromRemainingArguments=$true)]$Rest)',
     '  $real = __Sandbox-Real $Pm',
     '  if ($env:SANDBOX_OFF -or -not (Get-Command sandbox -ErrorAction SilentlyContinue)) { if ($real) { & $real @Rest }; return }',
+    "  # Global installs are host tooling — never sandbox them.",
+    "  if ($Rest | Where-Object { $_ -eq '-g' -or $_ -eq '--global' -or $_ -eq '--location=global' }) { if ($real) { & $real @Rest }; return }",
     "  $verb = if ($Rest.Count -ge 1) { [string]$Rest[0] } else { '' }",
     '  $go = $false',
     "  if ($Pm -eq 'yarn' -and $Rest.Count -eq 0) { $go = $true }",
