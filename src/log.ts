@@ -12,9 +12,20 @@ const HUMAN_PREFIX: Record<LogLevel, string> = {
   error: 'sandbox: ✖ ',
 };
 
+/**
+ * Render one field value for a human line. Primitives print as-is; arrays join with `,`
+ * (recursing, so a string array stays `a,b`); objects serialize as JSON — never the useless
+ * `[object Object]` that `String({})` would produce for a structured field like `endpoints`.
+ */
+function renderValue(v: unknown): string {
+  if (Array.isArray(v)) return v.map(renderValue).join(',');
+  if (v !== null && typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
 function fieldsToText(fields?: LogFields): string {
   if (!fields) return '';
-  const parts = Object.entries(fields).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : String(v)}`);
+  const parts = Object.entries(fields).map(([k, v]) => `${k}=${renderValue(v)}`);
   return parts.length ? ` (${parts.join(' ')})` : '';
 }
 

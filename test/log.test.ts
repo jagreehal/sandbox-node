@@ -10,6 +10,12 @@ describe('formatEvent', () => {
     );
   });
 
+  it('serializes object fields as JSON, never [object Object]', () => {
+    const line = formatEvent('info', 'ports forwarded', { endpoints: [{ container: 3000, host: 3000, url: 'http://localhost:3000' }] }, false);
+    expect(line).not.toContain('[object Object]');
+    expect(line).toBe('sandbox: ports forwarded (endpoints={"container":3000,"host":3000,"url":"http://localhost:3000"})');
+  });
+
   it('renders NDJSON when json=true', () => {
     expect(JSON.parse(formatEvent('warn', 'blocked', { hosts: ['a'] }, true))).toEqual({
       level: 'warn',
