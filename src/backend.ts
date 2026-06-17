@@ -11,11 +11,13 @@ import type { RunPlan } from './plan.js';
 
 const PROXY_IMAGE = 'node-install-sandbox-proxy:latest';
 
-/** Adjustments `execute` applies at run time (the egress mechanism). */
+/** Adjustments `execute` applies at run time (the egress mechanism, host-port availability). */
 export interface RunOverride {
   /** Explicit `--network` value; omit for the default bridge. */
   network?: string;
   extraEnv?: Record<string, string>;
+  /** Ports to actually publish, after probing host availability; falls back to `plan.ports`. */
+  ports?: string[];
 }
 
 /** A container runtime (docker or podman — their CLIs are arg-compatible here). */
@@ -64,10 +66,12 @@ export function renderRunArgs(plan: RunPlan, override: RunOverride = {}): string
       const source = m.source ? `source=${m.source},` : '';
       args.push('--mount', `type=volume,${source}target=${m.target}${m.readonly ? ',readonly' : ''}`);
     } else {
-      args.push('-v', `${m.source}:${m.target}${m.readonly ? ':ro' : ''}`);
+      // `--mount` (not `-v`): its key=value parsing never splits on `:`, so a Windows host path
+      // like `C:\Users\x` mounts correctly instead of being mangled by the `-v src:target` colon.
+      args.push('--mount', `type=bind,source=${m.source},target=${m.target}${m.readonly ? ',readonly' : ''}`);
     }
   }
-  for (const p of plan.ports) args.push('-p', p);
+  for (const p of override.ports ?? plan.ports) args.push('-p', p);
   for (const h of plan.addHosts) args.push('--add-host', h);
   if (override.network) args.push('--network', override.network);
   if (bridge) args.push('--entrypoint', METADATA_GUARD);

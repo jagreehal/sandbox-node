@@ -89,7 +89,12 @@ describe('global installs bypass the sandbox (-g is host tooling)', () => {
       chmodSync(f, 0o755);
     }
     const script = `export PATH="${dir}:$PATH"\n${renderWrapperBody('bash')}\n${line}\n`;
-    return execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    // The wrapper honours SANDBOX_OFF as an intentional whole-shell bypass. This harness
+    // asserts the *routing*, so scrub it from the inherited env — otherwise running the suite
+    // from a shell that has SANDBOX_OFF set (e.g. to dodge the path guard) flakes the test.
+    const env = { ...process.env };
+    delete env.SANDBOX_OFF;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8', env });
   }
 
   it('routes a normal install but passes a -g install through to the real tool', () => {

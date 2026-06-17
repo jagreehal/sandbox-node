@@ -3,9 +3,10 @@ import path from 'node:path';
 import type { SandboxConfig } from './config.js';
 import { capture } from './exec.js';
 import { COMMON_DEV_PORTS } from './network.js';
+import { hostPortOf } from './ports.js';
 
 /** Base image for the generated devcontainer (repo:tag; the digest is resolved at init time). */
-export const BASE_IMAGE = 'mcr.microsoft.com/devcontainers/javascript-node:22-bookworm';
+export const BASE_IMAGE = 'mcr.microsoft.com/devcontainers/javascript-node:24-bookworm';
 
 /**
  * Resolve `repo:tag` to its registry digest so the Dockerfile can pin `FROM …@sha256:…`
@@ -66,7 +67,7 @@ export function firewallAllowlist(config: SandboxConfig): string[] {
 
 /** Host ports to forward to the editor: the configured maps plus the dev-server set. */
 function forwardPorts(config: SandboxConfig): number[] {
-  const fromMaps = config.run.ports.map((p) => Number.parseInt(p.split(':')[0]!, 10)).filter((n) => Number.isFinite(n));
+  const fromMaps = config.run.ports.map(hostPortOf);
   const dev = config.run.devPorts ? COMMON_DEV_PORTS : [];
   return [...new Set([...fromMaps, ...dev])].sort((a, b) => a - b);
 }

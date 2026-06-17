@@ -73,6 +73,14 @@ with the offending packages. Two fixes: keep running through `sandbox` (`sandbox
 so tools execute on the same Linux platform, or run a plain install on the host once to add its native
 binaries for host-side dev.
 
+one platform everywhere: because install, dev, test, and build all run in the same Linux container,
+they behave the same on macOS, Windows, and Linux CI. The host OS stops mattering, so "works on my
+machine" shrinks: the native binaries, path semantics, and line endings your teammates and CI runner
+see are the ones you run. **Windows users gain the most here:** no MSVC/`node-gyp` toolchain, no CRLF
+or `C:\`-path drift, and parity with the Linux box that runs your CI and production. The supported
+Windows path today is WSL2 + Docker Desktop (the CLI assumes a POSIX shell); the container itself is
+identical to macOS and Linux.
+
 Anything that pulls *new* versions is gated the same way as install: the release-age cooldown, OSV
 malware check, and risk hints resolve against the versions the command would pull, so a
 freshly-published malicious bump is caught before it's fetched:
@@ -1248,6 +1256,17 @@ sandbox pnpm run dev
 sandbox yarn run dev
 sandbox bun run dev
 ```
+
+Port publishing is deterministic and conflict-safe:
+
+- **The URL it prints is the real one.** Every port publishes as an explicit `HOST:CONTAINER`,
+  so `sandbox` opens `http://localhost:4321` on the host port you configured, never a random
+  Docker-assigned one.
+- **A busy host port no longer aborts the run.** If something on the host already holds `8080`,
+  `sandbox` leaves that one port unpublished with a one-line notice and maps the rest. (It used to
+  fail the whole run with a Docker bind error.)
+- **`run.ports` takes a number or a string.** `4321`, `"4321"`, `"3000:3000"`, and
+  `"127.0.0.1:3000:3000"` all work; a bare port means `HOST == CONTAINER`.
 
 ### Hot-reload and file watching
 

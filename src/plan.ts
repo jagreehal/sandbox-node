@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { NetworkMode, SandboxConfig } from './config.js';
 import { type BuildSpec, resolveBuildSpec } from './image.js';
 import { COMMON_DEV_PORTS, networkPolicy } from './network.js';
+import { normalizePort } from './ports.js';
 import { frozenInstallArgv, lockfileName, packageManagerCacheDir, pmArgv, pmDefaultRegistryHost, type PackageManager } from './package-manager.js';
 import { PERSISTENCE_PATHS, type ProjectFacts } from './project.js';
 
@@ -17,6 +18,13 @@ export interface Mount {
   source?: string;
   target: string;
   readonly: boolean;
+  /**
+   * `bind` only: create the host directory if it's missing before mounting. `docker -v` did this
+   * implicitly; `--mount type=bind` (which we render, so Windows `C:\` paths don't collide with the
+   * `:` separator) errors on a missing source instead, so the few sources we expect to materialise
+   * on first use — the project Claude config dir — opt in here. {@link execute} does the mkdir.
+   */
+  ensureSource?: boolean;
 }
 
 /** A fully-resolved, serializable description of one container invocation. */
@@ -73,9 +81,9 @@ function grantMounts(facts: ProjectFacts, config: SandboxConfig, opts: { claudeR
     mounts.push({ type: 'bind', source: '/run/host-services/ssh-auth.sock', target: '/ssh-agent', readonly: false });
   }
   if (config.grants.claude === 'project') {
-    mounts.push({ type: 'bind', source: path.join(cwd, '.claude-sandbox'), target: `${CONTAINER_HOME}/.claude`, readonly: opts.claudeReadonly ?? false });
+    mounts.push({ type: 'bind', source: path.join(cwd, '.claude-sandbox'), target: `${CONTAINER_HOME}/.claude`, readonly: opts.claudeReadonly ?? false, ensureSource: true });
   } else if (config.grants.claude === 'home') {
-    mounts.push({ type: 'bind', source: path.join(homedir, '.claude'), target: `${CONTAINER_HOME}/.claude`, readonly: opts.claudeReadonly ?? false });
+    mounts.push({ type: 'bind', source: path.join(homedir, '.claude'), target: `${CONTAINER_HOME}/.claude`, readonly: opts.claudeReadonly ?? false, ensureSource: true });
   }
   for (const spec of config.grants.paths) {
     const { src, readonly } = parsePathSpec(spec, cwd, homedir);
@@ -308,10 +316,15 @@ export function planRun(config: SandboxConfig, facts: ProjectFacts, argv: string
   return plan;
 }
 
-/** The configured run ports plus, when `devPorts` is set, the common framework dev-server ports. */
+/**
+ * The configured run ports plus, when `devPorts` is set, the common framework dev-server ports.
+ * Every spec is normalised to an explicit `HOST:CONTAINER` — a bare `"4321"` would otherwise
+ * become `docker -p 4321`, which publishes to a *random* host port (see {@link normalizePort}).
+ */
 function configuredPorts(config: SandboxConfig): string[] {
-  const dev = config.run.devPorts ? COMMON_DEV_PORTS.map((p) => `${p}:${p}`) : [];
-  return [...new Set([...config.run.ports, ...dev])];
+  const explicit = config.run.ports.map(normalizePort);
+  const dev = config.run.devPorts ? COMMON_DEV_PORTS.map(normalizePort) : [];
+  return [...new Set([...explicit, ...dev])];
 }
 
 /** Ports to publish for a run — empty when the network mode publishes nothing. */
