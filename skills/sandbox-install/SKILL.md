@@ -39,6 +39,14 @@ Run the review pass first, then run the real install once the user has cleared t
    sandbox --json --fail-on-risk --fail-on-advisory --min-release-age 7 preflight <pm> install [pkgs]
    ```
 
+   **Reproducing an existing committed lockfile (CI, a fresh clone, a frozen install)?** A bare
+   `preflight <pm> install` gates *every* dependency, so an actively-maintained project trips the
+   release-age gate on packages that are already committed and vetted — noise, not new risk. For that
+   case run `sandbox delta` instead: it diffs the lockfile against the merge base (default
+   `origin/main`) and gates only the added/bumped versions, i.e. exactly what a change introduces.
+   When a bare-install preflight blocks on release-age, its output now points here too. Reserve the
+   full `preflight <pm> install [pkgs]` for when you are genuinely adding packages.
+
    - Exit **0** → no blocking findings. Go to step 4 and run the real install.
    - Exit **1** → would block. Read the findings and go to step 3.
    - `--json` returns a structured report: `{ blocked, checked, hints, ageViolations,

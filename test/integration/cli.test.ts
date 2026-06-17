@@ -172,6 +172,28 @@ describe('cli (golden, no docker)', () => {
         expect(stderr).toContain('blocked by the release-age gate (min 7 days)');
         expect(stderr).toContain('sandbox npm add left-pad@1.2.0'); // the concrete pin
         expect(stderr).toContain('would BLOCK this install');
+        expect(stderr).not.toContain('sandbox delta'); // adding an explicit package is NOT a reproduce
+      },
+    );
+  });
+
+  it('steers a bare reproduce-install age block toward `sandbox delta` (existing deps, not new ones)', async () => {
+    const dir = fixture({ 'package.json': JSON.stringify({ name: 'x', dependencies: { 'left-pad': '^1.3.0' } }) });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await withRegistry(
+      {
+        'left-pad': {
+          name: 'left-pad',
+          'dist-tags': { latest: '1.3.0' },
+          time: { created: '2020-01-01T00:00:00.000Z', '1.2.0': '2024-01-01T00:00:00.000Z', '1.3.0': threeHoursAgo },
+          versions: { '1.2.0': {}, '1.3.0': {} },
+        },
+      },
+      async (url) => {
+        const { code, stderr } = await runCli(dir, ['--min-release-age', '7', 'preflight', 'npm', 'install'], { SANDBOX_NPM_REGISTRY: url });
+        expect(code).toBe(1);
+        expect(stderr).toContain('blocked by the release-age gate (min 7 days)');
+        expect(stderr).toContain('sandbox delta'); // the low-noise gate for an existing lockfile
       },
     );
   });

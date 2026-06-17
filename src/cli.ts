@@ -504,7 +504,18 @@ function formatAge(ms: number): string {
   return `${Math.floor(hours / 24)} days ago`;
 }
 
-function logReleaseAgeBlock(violations: ReleaseAgeViolation[], minDays: number, pm: PackageManager, suggestions: PinSuggestion[]): void {
+/**
+ * Whether the gated targets are EXISTING dependencies (a bare install/update reproducing the
+ * manifest/lockfile) rather than packages being added. When true, an age block is usually noise —
+ * the versions are already committed — so we steer to `sandbox delta`, which gates only what a change
+ * introduces.
+ */
+function gatingExistingDeps(route: Route): boolean {
+  if (route.model === 'install') return parsePackageTargets(route.args).length === 0;
+  return route.model === 'update' || route.model === 'auditFix';
+}
+
+function logReleaseAgeBlock(violations: ReleaseAgeViolation[], minDays: number, pm: PackageManager, suggestions: PinSuggestion[], reproduce = false): void {
   const pin = new Map(suggestions.map((s) => [s.name, s]));
   const lines = [
     `blocked by the release-age gate (min ${minDays} day${minDays === 1 ? '' : 's'})`,
@@ -514,6 +525,8 @@ function logReleaseAgeBlock(violations: ReleaseAgeViolation[], minDays: number, 
       return `  ${v.name}@${v.version} was published ${formatAge(v.ageMs)}${tail}`;
     }),
     'freshly-published versions are the supply-chain worm window. Options:',
+    // For a bare reproduce-the-lockfile install, the right tool is the delta gate — lead with it.
+    ...(reproduce ? ['  • these are existing dependencies, not new ones — review only what a change introduces: `sandbox delta` (diffs the lockfile against origin/main, skipping versions already committed)'] : []),
     suggestions.length ? '  • pin the suggested older version above' : '  • pin a known-good older version',
     '  • wait until it ages past the threshold, then retry',
     '  • override this once: add --min-release-age 0 before the command',
@@ -857,7 +870,7 @@ async function preflightRoute(globals: Globals, config: SandboxConfig, facts: Pr
   // Release-age gate — the strongest control, so it blocks first.
   if (result.ageViolations.length) {
     const suggestions = await suggestPins(result.ageViolations, ap.minReleaseAgeDays);
-    logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions);
+    logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
     return 1;
   }
   // Known-malware advisory.
@@ -931,7 +944,7 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
   // Human report: log every finding (no short-circuit — this is a report, not a gate).
   logDeep(ap, result, facts.pm);
   if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
-  if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions);
+  if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
   if (ap.riskHints) logRiskHints(targets, result.hints);
