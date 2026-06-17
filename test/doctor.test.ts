@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoFixActions, type Check } from '../src/doctor.js';
+import { autoFixActions, doctorExitCode, type Check } from '../src/doctor.js';
 
 const ok = (label: string): Check => ({ level: 'ok', label, detail: 'fine' });
 
@@ -29,5 +29,21 @@ describe('autoFixActions', () => {
       { level: 'info', label: 'image', detail: 'stale', autoFix: 'build' },
     ];
     expect(autoFixActions(checks)).toEqual(['build']);
+  });
+});
+
+describe('doctorExitCode', () => {
+  it('is 0 when only ok/info checks are present (e.g. a missing config file uses defaults)', () => {
+    const checks: Check[] = [
+      { level: 'info', label: 'config', detail: 'no config file — using defaults' },
+      ok('backend'),
+      ok('daemon'),
+      { level: 'info', label: 'image', detail: 'will build on first use', autoFix: 'build' },
+    ];
+    expect(doctorExitCode(checks)).toBe(0);
+  });
+
+  it('is 1 when any check failed (a down daemon, a missing backend, a malformed config)', () => {
+    expect(doctorExitCode([ok('config'), { level: 'fail', label: 'daemon', detail: 'not reachable' }])).toBe(1);
   });
 });

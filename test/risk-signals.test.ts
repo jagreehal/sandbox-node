@@ -68,6 +68,30 @@ describe('typosquat signal', () => {
     const hints = await collectRiskHints([{ name: '@evil/loadsh', spec: '' }], { client, now: NOW });
     expect(hints.some((h) => h.code === 'typosquat')).toBe(true);
   });
+
+  it('does not flag a short name like `ai` that lands near many unrelated short names', async () => {
+    setTopPackagesForTest(['ajv', 'arg', 'ava', 'lodash']);
+    const client = registryOf({ ai: { name: 'ai', 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': {} }, time: { '1.0.0': LONG_AGO } } });
+    const hints = await collectRiskHints([{ name: 'ai', spec: '' }], { client, now: NOW });
+    expect(hints.some((h) => h.code === 'typosquat')).toBe(false);
+  });
+
+  it('does not flag a member of a reputable scope (@typescript-eslint/parser vs parcel/terser)', async () => {
+    // The scope owns a package in the corpus, so its members are trusted by namespace ownership —
+    // even though the bare name `parser` is two edits from `parcel` and `terser`.
+    setTopPackagesForTest(['@typescript-eslint/rule-tester', 'parcel', 'terser']);
+    const client = registryOf({ '@typescript-eslint/parser': { name: '@typescript-eslint/parser', 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': {} }, time: { '1.0.0': LONG_AGO } } });
+    const hints = await collectRiskHints([{ name: '@typescript-eslint/parser', spec: '' }], { client, now: NOW });
+    expect(hints.some((h) => h.code === 'typosquat')).toBe(false);
+  });
+
+  it('does not flag a longer compound name two inserts from a popular one (tsconfig vs config)', async () => {
+    // Distance 2 but different lengths — a legit compound word, not a same-length impersonation.
+    setTopPackagesForTest(['@total-typescript/tsconfig', 'config']);
+    const client = registryOf({ '@evil/tsconfig': { name: '@evil/tsconfig', 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': {} }, time: { '1.0.0': LONG_AGO } } });
+    const hints = await collectRiskHints([{ name: '@evil/tsconfig', spec: '' }], { client, now: NOW });
+    expect(hints.some((h) => h.code === 'typosquat')).toBe(false);
+  });
 });
 
 describe('provenance-regression signal', () => {

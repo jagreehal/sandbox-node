@@ -4,6 +4,7 @@ import { createBackend, sandboxImageUpToDate } from './backend.js';
 import { capture, quiet } from './exec.js';
 import { readConfig, type SandboxConfig } from './config.js';
 import { resolveBaseImage, resolveBuildSpec } from './image.js';
+import { findHostIncompatiblePackagesInWorkspace, hostPlatform } from './native-deps.js';
 import { lockfileName, lockfilePresent, resolvePackageManager } from './package-manager.js';
 import { registryDiagnostics, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { nodeEolStatus, runtimeVulnerabilities } from './runtime-cve.js';
@@ -56,9 +57,13 @@ function startCommand(backend: 'docker' | 'podman'): string {
   return backend === 'docker' ? 'sudo systemctl start docker' : 'start the Podman service or machine for this host';
 }
 
+/** Exit code rule: doctor fails only on a real problem (a `fail`-level check), never on `info`. */
+export function doctorExitCode(checks: Check[]): number {
+  return checks.some((c) => c.level === 'fail') ? 1 : 0;
+}
+
 export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<number> {
   const checks: Check[] = [];
-  let failed = false;
 
   const configFile = opts.config ?? path.join(cwd, 'sandbox.config.json');
   let config: SandboxConfig | undefined;
@@ -71,7 +76,6 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
       detail: present ? configFile : `no config file — using defaults (create ${configFile} to customise)`,
     });
   } catch (e) {
-    failed = true;
     checks.push({
       level: 'fail',
       label: 'config',
@@ -121,7 +125,6 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
 
   const version = await capture(opts.backend, ['--version']);
   if (version.code !== 0) {
-    failed = true;
     checks.push({
       level: 'fail',
       label: 'backend',
@@ -137,7 +140,6 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
 
     const info = await capture(opts.backend, ['info']);
     if (info.code !== 0) {
-      failed = true;
       checks.push({
         level: 'fail',
         label: 'daemon',
@@ -208,6 +210,24 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     }
   }
 
+  // node_modules platform consistency. A `sandbox` install runs in the container, so it writes the
+  // container's native optional deps (e.g. `@rolldown/binding-linux-*`) into the host-mounted tree.
+  // Host tooling (vitest/esbuild) then fails with a cryptic missing-binding error. Surface it here
+  // with the same fix as the post-install note, so `doctor` explains the mismatch before a test run does.
+  if (existsSync(path.join(cwd, 'node_modules'))) {
+    const foreignNative = findHostIncompatiblePackagesInWorkspace(cwd, hostPlatform());
+    checks.push(
+      foreignNative.length
+        ? {
+            level: 'info',
+            label: 'node_modules',
+            detail: `${foreignNative.length} package(s) are built for another platform (e.g. ${foreignNative[0]}) — run project tools with \`sandbox test\`/\`sandbox dev\`, or reinstall on this host for native dev`,
+            fixes: [`run tests via \`sandbox test\`, or reinstall on the host with \`${pm} install\` for host-native tooling`],
+          }
+        : { level: 'ok', label: 'node_modules', detail: `native packages match this ${process.platform} host` },
+    );
+  }
+
   for (const check of checks) print(check);
 
   if (opts.fix) {
@@ -226,5 +246,5 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     }
   }
 
-  return failed ? 1 : 0;
+  return doctorExitCode(checks);
 }

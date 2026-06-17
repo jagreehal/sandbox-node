@@ -8,9 +8,15 @@ const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepublish', '
 const RECENT_VERSION_STRONG_MS = 24 * 60 * 60 * 1000;
 const RECENT_VERSION_LIGHT_MS = 7 * 24 * 60 * 60 * 1000;
 const NEW_PACKAGE_MS = 30 * 24 * 60 * 60 * 1000;
-/** Typosquat edit-distance band: 1–2 edits from a popular name is suspicious; 0 is the package itself. */
-const TYPOSQUAT_MIN_DISTANCE = 1;
+/** Typosquat edit-distance ceiling: up to 2 edits from a popular name is suspicious; 0 is the package itself. */
 const TYPOSQUAT_MAX_DISTANCE = 2;
+/**
+ * Shortest name the typosquat signal will judge. Below this, a 1–2 edit band catches half the
+ * registry: `ai`, `vm`, `js`, `mcp` all land within two edits of dozens of unrelated short names
+ * (`c8`, `rc`, `ws`, `arg`), so the matches are noise, not impersonation. Real typosquat targets
+ * (`lodash`, `express`, `chalk`, `react`) are all longer than this.
+ */
+const TYPOSQUAT_MIN_NAME_LENGTH = 5;
 /** A first-ever publish by this user this recent reads like an account takeover, not a long-stable package. */
 const NEW_PUBLISHER_RECENT_MS = 21 * 24 * 60 * 60 * 1000;
 /** Maintainer reappears after a long silence: >6mo warns, >9mo errors (dormant-account compromise). */
@@ -528,24 +534,53 @@ export function loadTopPackages(): Set<string> {
   return topPackagesCache;
 }
 
+/**
+ * The scopes that own at least one package in the top-packages corpus, e.g. `@typescript-eslint`,
+ * `@ai-sdk`, `@total-typescript`. npm scopes are owned namespaces: a member of a reputable scope
+ * can't be a typosquat of an unrelated unscoped name, so we never edit-distance-match those. Derived
+ * once from {@link loadTopPackages} and cached alongside it.
+ */
+let topScopesCache: Set<string> | undefined;
+export function loadTopScopes(): Set<string> {
+  if (topScopesCache) return topScopesCache;
+  const scopes = new Set<string>();
+  for (const name of loadTopPackages()) {
+    if (name.startsWith('@') && name.includes('/')) scopes.add(name.slice(0, name.indexOf('/')));
+  }
+  topScopesCache = scopes;
+  return topScopesCache;
+}
+
 /** Test seam: replace the corpus (also resets it to the bundled file when called with undefined). */
 export function setTopPackagesForTest(names: string[] | undefined): void {
   topPackagesCache = names ? new Set(names) : undefined;
+  topScopesCache = undefined; // recomputed from the new corpus on next read
 }
 
 /**
  * Popular package names within the typosquat edit-distance band of `name`. Empty when `name` is
- * itself popular (it IS the real package) or nothing is close. Scoped names compare on the part after
- * the slash so `@evil/loadsh` still trips against `lodash`.
+ * itself popular (it IS the real package), sits in a reputable scope, is too short to judge, or
+ * nothing is close. Scoped names from an UNKNOWN scope compare on the part after the slash so
+ * `@evil/loadsh` still trips against `lodash`; names from a known scope (`@typescript-eslint/parser`)
+ * are trusted by namespace ownership and skipped.
  */
 function typosquatMatches(name: string, corpus: Set<string>): string[] {
   if (corpus.size === 0 || corpus.has(name)) return [];
+  // A reputable, owned scope can't be impersonated by edit distance on its unscoped part.
+  if (name.startsWith('@') && name.includes('/') && loadTopScopes().has(name.slice(0, name.indexOf('/')))) return [];
   const bare = name.includes('/') ? name.slice(name.indexOf('/') + 1) : name;
   if (corpus.has(bare)) return [];
+  // Below the length floor the edit-distance band is meaningless (every short name matches many).
+  if (bare.length < TYPOSQUAT_MIN_NAME_LENGTH) return [];
   const matches: string[] = [];
   for (const popular of corpus) {
+    if (popular.length < TYPOSQUAT_MIN_NAME_LENGTH) continue; // don't match against short popular names either
     const d = levenshtein(bare, popular, TYPOSQUAT_MAX_DISTANCE);
-    if (d >= TYPOSQUAT_MIN_DISTANCE && d <= TYPOSQUAT_MAX_DISTANCE) matches.push(popular);
+    // Distance 1 (a single sub/insert/delete) for any pair; distance 2 only between SAME-LENGTH names
+    // (the classic substitution/transposition squat like `loadsh`→`lodash`). A distance-2 match across
+    // different lengths is usually a legit compound name, not impersonation: `tsconfig`→`config`,
+    // `ts-reset`→`ts-jest`.
+    if (d === 1 || (d === 2 && bare.length === popular.length)) matches.push(popular);
   }
   return matches;
 }
