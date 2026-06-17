@@ -162,9 +162,14 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
     return 0;
   }
 
+  // No TTY and no explicit --preset: rather than dead-end with an error, write the safe
+  // middle preset and say so. The user (or agent) can re-run with --preset to choose, or
+  // --force to overwrite. Keeps `sandbox init` from failing in CI / agent shells.
   if (!process.stdout.isTTY) {
-    console.error(`sandbox: \`init\` needs a TTY; pass --preset ${PRESET_NAMES.join('|')} for non-interactive use`);
-    return 1;
+    const fallback: PresetName = 'balanced';
+    console.log(`sandbox: no TTY and no --preset given — using the '${fallback}' preset (safe default).`);
+    console.log(`sandbox: re-run with --preset ${PRESET_NAMES.join('|')} to choose a different one.`);
+    return runInit(cwd, { ...opts, preset: fallback });
   }
 
   p.intro('sandbox-node init');

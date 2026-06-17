@@ -276,6 +276,17 @@ describe('planRun', () => {
   it('never publishes dev ports when the network is none', () => {
     expect(planRun(cfg({ run: { network: 'none', devPorts: true } }), facts(), ['x']).ports).toEqual([]);
   });
+
+  it('normalizes a bare or numeric port to HOST:CONTAINER (no random host port)', () => {
+    expect(planRun(cfg({ run: { network: 'on', ports: ['4321'] } }), facts(), ['x']).ports).toEqual(['4321:4321']);
+    expect(planRun(cfg({ run: { network: 'on', ports: [3000] } }), facts(), ['x']).ports).toEqual(['3000:3000']);
+  });
+
+  it('publishes override.ports over plan.ports when execute narrows them to the free set', () => {
+    const plan = planRun(cfg({ run: { network: 'on', ports: ['3000:3000', '8080:8080'] } }), facts(), ['x']);
+    const args = renderRunArgs(plan, { ports: ['3000:3000'] });
+    expect(args.filter((a, i) => args[i - 1] === '-p')).toEqual(['3000:3000']);
+  });
 });
 
 describe('grants', () => {
@@ -327,9 +338,18 @@ describe('renderRunArgs', () => {
     expect(args).toContain('--cap-drop');
     expect(args).toContain('ALL');
     expect(joined).toContain('--network none');
-    expect(joined).toContain(':/workspace/package.json:ro'); // manifest locked
+    expect(joined).toContain('type=bind,source='); // binds use --mount, not -v
+    expect(joined).toContain('target=/workspace/package.json,readonly'); // manifest locked
     expect(joined).toContain('type=volume,target=/workspace/.github,readonly'); // missing vector blocked
+    expect(args).not.toContain('-v'); // never the colon-splitting short form (Windows-safe)
     expect(args[args.length - 2]).toBe('npm'); // image precedes argv
+  });
+
+  it('renders a Windows host path intact (drive-letter colon is not split)', () => {
+    const plan = planRun(cfg({ run: { network: 'on' } }), facts({ cwd: 'C:\\Users\\dev\\proj' }), ['npm', 'run', 'dev']);
+    const args = renderRunArgs(plan);
+    expect(args).toContain('type=bind,source=C:\\Users\\dev\\proj,target=/workspace');
+    expect(args).not.toContain('-v');
   });
 
   it('merges egress proxy env supplied at run time', () => {

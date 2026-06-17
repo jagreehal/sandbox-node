@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
 import { createBackend, type ContainerBackend, type RunOverride } from './backend.js';
 import { scanCanaryLog, type Canary } from './canary.js';
@@ -6,6 +6,7 @@ import { log } from './log.js';
 import { findHostIncompatiblePackagesInWorkspace, hostPlatform } from './native-deps.js';
 import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
+import { endpointsFor, isHostPortFree, resolvePortPublish } from './ports.js';
 import { appendAudit } from './receipt.js';
 import { missingAllowHosts, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { classifyCommand, snapshotTree, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore } from './tamper.js';
@@ -69,6 +70,25 @@ function auditRun(plan: RunPlan, result: ExecuteResult): ExecuteResult {
   return result;
 }
 
+/**
+ * Probe the configured ports, report the reachable URLs (and any skipped because their host
+ * port is taken), and return the specs we can actually publish.
+ */
+async function resolvePublishablePorts(ports: string[]): Promise<string[]> {
+  const { available, busy, conflicts } = await resolvePortPublish(ports, isHostPortFree);
+  if (available.length) {
+    const endpoints = endpointsFor(available);
+    log.info(`ports forwarded — open ${endpoints.map((e) => e.url).join(' , ')}`, { endpoints });
+  }
+  if (busy.length) {
+    log.warn(`host port already in use, not published: ${busy.join(', ')} — free it or set a different host port in run.ports`, { skipped: busy });
+  }
+  if (conflicts.length) {
+    log.warn(`duplicate host port mapping ignored: ${conflicts.join(', ')} — each host port publishes once; check for run.ports / devPorts overlap`, { conflicts });
+  }
+  return available;
+}
+
 export async function execute(
   plan: RunPlan,
   backend: ContainerBackend = createBackend('docker'),
@@ -78,13 +98,21 @@ export async function execute(
   const kind = classifyCommand(plan.argv);
   const before = workspaceRoot && kind !== 'other' ? snapshotTree(workspaceRoot) : undefined;
   await backend.ensureImage(plan.build);
-  const policy = networkPolicy(plan.network);
-  if (plan.interactive && plan.ports.length) {
-    const hostPorts = plan.ports.map((p) => p.split(':')[0]);
-    log.info(`dev server ports forwarded: ${hostPorts.join(', ')} — open http://localhost:<port> in your browser`, { ports: hostPorts });
+  // `--mount type=bind` errors on a missing source, where `-v` would have created it. Recreate
+  // that implicit behaviour for the mounts that opted in (the project Claude config dir).
+  for (const m of plan.mounts) {
+    if (m.ensureSource && m.source && !existsSync(m.source)) mkdirSync(m.source, { recursive: true });
   }
-  const realize = (override: RunOverride): Promise<{ code: number; stdout?: string; stderr?: string }> =>
-    opts.capture ? backend.runPlanCaptured(plan, override) : backend.runPlan(plan, override).then((code) => ({ code }));
+  const policy = networkPolicy(plan.network);
+  // Publish only the host ports that are actually free. Probing first turns a fatal
+  // "Bind for 0.0.0.0:8080 failed: port is already allocated" into a skipped line, and
+  // because every spec is an explicit HOST:CONTAINER the URLs we print are the real ones.
+  // The result rides the RunOverride seam (not a plan mutation) so the plan stays immutable.
+  const publishPorts = plan.interactive && plan.ports.length ? await resolvePublishablePorts(plan.ports) : plan.ports;
+  const realize = (override: RunOverride): Promise<{ code: number; stdout?: string; stderr?: string }> => {
+    const o = { ...override, ports: publishPorts };
+    return opts.capture ? backend.runPlanCaptured(plan, o) : backend.runPlan(plan, o).then((code) => ({ code }));
+  };
   const captured = (out: { stdout?: string; stderr?: string }) => (opts.capture ? { stdout: out.stdout ?? '', stderr: out.stderr ?? '' } : {});
   try {
     if (policy.useEgressProxy) {

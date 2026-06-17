@@ -2,10 +2,22 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { isValidPortSpec } from './ports.js';
 
 /** Network policy for a phase: no egress, full bridge, or default-deny allowlist. */
 export const NetworkMode = z.enum(['none', 'on', 'allowlist']);
 export type NetworkMode = z.infer<typeof NetworkMode>;
+
+/**
+ * A port to publish. Accepts a number (`4321`) or string — bare (`"4321"`), `"HOST:CONTAINER"`,
+ * or `"IP:HOST:CONTAINER"`. We keep the value as-is (no transform — that can't be expressed in
+ * JSON Schema, which the committed `sandbox.schema.json` is generated from); `normalizePort`
+ * coerces a number and expands a bare port to `HOST:CONTAINER` at plan time. The `.refine` turns
+ * a typo into a readable message instead of Zod's terse "expected string, received number".
+ */
+export const PortSpec = z.union([z.string(), z.number().int().positive()]).refine(isValidPortSpec, {
+  message: 'invalid port — use a number or "PORT", "HOST:CONTAINER", or "IP:HOST:CONTAINER"',
+});
 
 export const SandboxConfigSchema = z
   .object({
@@ -97,7 +109,7 @@ export const SandboxConfigSchema = z
     run: z
       .object({
         network: NetworkMode.default('none'),
-        ports: z.array(z.string()).default([]),
+        ports: z.array(PortSpec).default([]),
         // Publish the common framework dev-server ports (Vite/Next/Astro/…) to the host
         // so `npm run dev` is reachable without listing each one. Only takes effect when
         // `network` isn't 'none'. The `vibe`/`agent` presets turn this on.
