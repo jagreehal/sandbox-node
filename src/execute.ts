@@ -6,7 +6,7 @@ import { log } from './log.js';
 import { findHostIncompatiblePackagesInWorkspace, hostPlatform } from './native-deps.js';
 import { networkPolicy } from './network.js';
 import type { RunPlan } from './plan.js';
-import { endpointsFor, isHostPortFree, resolvePortPublish } from './ports.js';
+import { endpointsFor, hostPortOf, isHostPortFree, resolvePortPublish } from './ports.js';
 import { appendAudit } from './receipt.js';
 import { missingAllowHosts, renderAllowCommand, renderAllowlistSnippet } from './registry.js';
 import { classifyCommand, snapshotTree, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore } from './tamper.js';
@@ -76,15 +76,20 @@ function auditRun(plan: RunPlan, result: ExecuteResult): ExecuteResult {
  */
 async function resolvePublishablePorts(ports: string[]): Promise<string[]> {
   const { available, busy, conflicts } = await resolvePortPublish(ports, isHostPortFree);
-  if (available.length) {
-    const endpoints = endpointsFor(available);
-    log.info(`ports forwarded — open ${endpoints.map((e) => e.url).join(' , ')}`, { endpoints });
+  // One port → hand over the exact clickable URL. Many ports → that's the dev-port catch-all where
+  // only one will actually serve, so listing five "open me" URLs misleads; name the mapped ports
+  // and point at the URL the dev server announces itself. URLs/ports live in the message, not a
+  // structured field (a redundant per-port object dump just bloats the line).
+  if (available.length === 1) {
+    log.info(`port forwarded → ${endpointsFor(available)[0]!.url}`);
+  } else if (available.length > 1) {
+    log.info(`dev ports forwarded to localhost: ${available.map(hostPortOf).join(', ')} — open the URL your dev server prints below`);
   }
   if (busy.length) {
-    log.warn(`host port already in use, not published: ${busy.join(', ')} — free it or set a different host port in run.ports`, { skipped: busy });
+    log.warn(`host port ${busy.map(hostPortOf).join(', ')} already in use — skipped (set run.ports to map a different one)`);
   }
   if (conflicts.length) {
-    log.warn(`duplicate host port mapping ignored: ${conflicts.join(', ')} — each host port publishes once; check for run.ports / devPorts overlap`, { conflicts });
+    log.warn(`duplicate host port ignored: ${conflicts.map(hostPortOf).join(', ')} — each host port maps once (check run.ports / devPorts overlap)`);
   }
   return available;
 }
