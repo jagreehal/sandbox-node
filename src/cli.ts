@@ -15,7 +15,7 @@ import { resolveBuildSpec } from './image.js';
 import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
-import { isGlobalInstall, routePassthrough, type Route } from './dispatch.js';
+import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
 import { execute } from './execute.js';
 import { classifyCommand } from './tamper.js';
@@ -573,11 +573,23 @@ function riskDetailLine(hint: RiskHint): string {
   return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
 }
 
-function logRiskHints(targets: RiskTarget[], allHints: RiskHint[]): void {
-  if (targets.length) log.info(`checked ${targets.length} package${targets.length === 1 ? '' : 's'} for registry risk hints`);
+/**
+ * Print the registry risk hints. `contained` flips the closing line between the two contexts that
+ * share this code: the install/run path (true) is about to run the install inside the container, so
+ * we say so and reassure once; `check`/`preflight` (false) only looked at the registry, so claiming
+ * containment there would be a lie — it tells the user nothing was installed instead.
+ */
+function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], { contained }: { contained: boolean } = { contained: true }): void {
   const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
-  if (!hints.length) return;
-  log.warn(`${hints.length} risk hint${hints.length === 1 ? '' : 's'}`);
+  const checked = targets.length ? `checked ${targets.length} package${targets.length === 1 ? '' : 's'} for registry risk hints` : undefined;
+  if (!hints.length) {
+    // Nothing flagged. On the install path the gate stays invisible (debug) — good security gets out
+    // of the way. An explicit `check` still says it looked, since confirming that is why it was run.
+    if (checked) (contained ? log.debug : log.info)(checked);
+    return;
+  }
+  if (checked) log.info(checked);
+  log.warn(`${hints.length} thing${hints.length === 1 ? '' : 's'} worth a look before installing`);
   const grouped = new Map<string, RiskHint[]>();
   for (const hint of hints) {
     const key = formatRiskPackage(hint);
@@ -589,7 +601,9 @@ function logRiskHints(targets: RiskTarget[], allHints: RiskHint[]): void {
     if (level === 'error') log.error(lines.join('\n'));
     else log.warn(lines.join('\n'));
   }
-  log.info('continuing inside containment');
+  // One plain "why this is fine" line, instead of repeating "still contained" on every hint above.
+  if (contained) log.info("heads-up only — the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing.");
+  else log.info('heads-up only — this was a check, so nothing was installed or downloaded. Run the install when you\'re ready.');
 }
 
 /**
@@ -1077,7 +1091,7 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
   if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
-  if (ap.riskHints) logRiskHints(targets, result.hints);
+  if (ap.riskHints) logRiskHints(targets, result.hints, { contained: false });
 
   if (exit) log.error('preflight: would BLOCK this install — resolve the findings above, or re-run with an override flag');
   else log.info('preflight: no blocking findings — safe to install');
@@ -1412,7 +1426,14 @@ function maybeNotifyUpdate(globals: Globals, cliEntry: string, rootDir: string, 
 }
 
 async function main(): Promise<number> {
-  const { globals, cmd, args } = parse(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  const selfArgv = unwrapSelfInvocation(rawArgv);
+  const { globals, cmd, args } = parse(selfArgv ?? rawArgv);
+  if (selfArgv) {
+    const shown = ['sandbox', ...selfArgv].join(' ').trim();
+    // Action + why, in one line: what we're doing, and the plain reason it's safe/expected.
+    log.info(`using the sandbox already on your machine — \`${shown}\` runs directly, instead of fetching the CLI again through npx`);
+  }
 
   // Hidden re-entry: the detached background checker (spawned by scheduleUpdateCheck) runs one
   // registry lookup, writes the cache, and exits. Must short-circuit before any other dispatch.
@@ -1725,7 +1746,15 @@ async function main(): Promise<number> {
           return result.code === 0 ? 1 : result.code;
         }
       }
-      if (!result.deniedHosts.length || !canPrompt) return result.code;
+      if (!result.deniedHosts.length || !canPrompt) {
+        // One calm, confident close after a clean dependency op: make the invisible protection legible
+        // once. Only for install-class commands that succeeded — a dev server or a failed run says its
+        // own thing. `classifyCommand` returns 'other' for run/scripts, so those stay quiet.
+        if (result.code === 0 && classifyCommand(plan.argv) !== 'other') {
+          log.info('done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir');
+        }
+        return result.code;
+      }
       const deniedHosts = [...new Set(result.deniedHosts)].sort();
       const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });
       if (choice === 'cancel') return 1;

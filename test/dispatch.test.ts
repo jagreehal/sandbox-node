@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGlobalInstall, routePassthrough, type Route } from '../src/dispatch.js';
+import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from '../src/dispatch.js';
 
 const route = (cmd: string): Route | undefined => routePassthrough(cmd.split(' ').filter(Boolean));
 
@@ -199,5 +199,34 @@ describe('isGlobalInstall — global installs across every package manager', () 
     expect(isGlobal('pnpm', 'add zod')).toBe(false);
     expect(isGlobal('bun', 'install')).toBe(false);
     expect(isGlobal('yarn', 'add react')).toBe(false);
+  });
+});
+
+const unwrap = (cmd: string): string[] | undefined => unwrapSelfInvocation(cmd.split(' ').filter(Boolean));
+
+describe('unwrapSelfInvocation — never sandbox sandbox', () => {
+  it('unwraps `npx @jagreehal/sandbox-node <cmd>` to the bare subcommand', () => {
+    expect(unwrap('npx @jagreehal/sandbox-node check lodash')).toEqual(['check', 'lodash']);
+  });
+
+  it('handles every npx-family runner and a version pin', () => {
+    expect(unwrap('bunx @jagreehal/sandbox-node doctor')).toEqual(['doctor']);
+    expect(unwrap('pnpm dlx @jagreehal/sandbox-node@latest check')).toEqual(['check']);
+    expect(unwrap('npm exec @jagreehal/sandbox-node -- check express')).toEqual(['check', 'express']);
+    expect(unwrap('x sandbox-node@1.7.0 verify')).toEqual(['verify']);
+  });
+
+  it('skips runner flags like -y before the package', () => {
+    expect(unwrap('npx -y @jagreehal/sandbox-node check')).toEqual(['check']);
+  });
+
+  it('returns [] when the CLI is invoked with no subcommand (so it falls through to help)', () => {
+    expect(unwrap('npx @jagreehal/sandbox-node')).toEqual([]);
+  });
+
+  it('leaves a real npx of some OTHER package alone', () => {
+    expect(unwrap('npx cowsay hi')).toBeUndefined();
+    expect(unwrap('npm install lodash')).toBeUndefined();
+    expect(unwrap('check lodash')).toBeUndefined();
   });
 });

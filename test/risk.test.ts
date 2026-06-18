@@ -202,7 +202,7 @@ describe('collectRiskHints', () => {
           package: 'sharp',
           version: '0.33.5',
           level: 'error',
-          message: 'very recently published 6 hours ago — install still contained',
+          message: 'very recently published 6 hours ago — fresh releases are the supply-chain worm window',
         }),
         expect.objectContaining({
           code: 'bin_exposed',
@@ -214,7 +214,7 @@ describe('collectRiskHints', () => {
           code: 'new_package',
           package: 'new-pkg',
           version: '1.2.3',
-          message: 'first published 3 days ago — install still contained',
+          message: 'first published 3 days ago — still a young package',
         }),
         expect.objectContaining({
           code: 'deprecated',

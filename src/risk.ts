@@ -644,7 +644,7 @@ function maintainerChangeHint(pkg: ResolvedTarget, now: Date): RiskHint | undefi
         code: 'maintainer_change',
         package: pkg.name,
         version: pkg.version,
-        message: `first release ever by publisher ${publisher} (${humanAge(age)}) — possible account takeover; install still contained`,
+        message: `first release ever by publisher ${publisher} (${humanAge(age)}) — possible account takeover`,
         detail: { kind: 'new_publisher', publisher, firstPublishAgeDays: Math.floor(age / DAY_MS) },
       };
     }
@@ -660,7 +660,7 @@ function maintainerChangeHint(pkg: ResolvedTarget, now: Date): RiskHint | undefi
         code: 'maintainer_change',
         package: pkg.name,
         version: pkg.version,
-        message: `publisher ${publisher} was dormant ${Math.floor(gap / DAY_MS)} days before this release — install still contained`,
+        message: `publisher ${publisher} was dormant ${Math.floor(gap / DAY_MS)} days before this release`,
         detail: { kind: 'dormant', publisher, gapDays: Math.floor(gap / DAY_MS) },
       };
     }
@@ -759,7 +759,7 @@ export async function expiredDomainHints(
         code: 'expired_domain',
         package: pkg.name,
         version: pkg.version,
-        message: `maintainer email domain "${bad}" no longer resolves — can be re-registered for account takeover; install still contained`,
+        message: `maintainer email domain "${bad}" no longer resolves — can be re-registered for account takeover`,
         detail: { domain: bad },
       });
     }
@@ -812,7 +812,7 @@ export async function lowDownloadHints(
         code: 'low_downloads',
         package: pkg.name,
         version: pkg.version,
-        message: `only ${downloads} downloads last month — very low usage; install still contained`,
+        message: `only ${downloads} downloads last month — very low usage`,
         detail: { downloads },
       });
     }
@@ -1142,7 +1142,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'provenance_regression',
         package: pkg.name,
         version: pkg.version,
-        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it — release-path change; install still contained`,
+        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it — release-path change`,
         detail: { priorVersion: priorProvenance },
       });
     }
@@ -1179,7 +1179,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'recent_version',
           package: pkg.name,
           version: pkg.version,
-          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)} — install still contained`,
+          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)} — fresh releases are the supply-chain worm window`,
           detail: { publishedAt: pkg.publishedAt.toISOString(), severity: age < RECENT_VERSION_STRONG_MS ? 'strong' : 'light' } satisfies RecentVersionDetail,
         });
       }
@@ -1192,7 +1192,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'new_package',
           package: pkg.name,
           version: pkg.version,
-          message: `first published ${humanAge(age)} — install still contained`,
+          message: `first published ${humanAge(age)} — still a young package`,
           detail: { createdAt: pkg.createdAt.toISOString() },
         });
       }
