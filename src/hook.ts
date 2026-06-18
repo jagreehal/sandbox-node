@@ -29,6 +29,7 @@ const RUNNERS = new Set(['npx', 'pnpx', 'bunx']);
 const DANGEROUS_SUBCOMMANDS = new Set([
   'install', 'i', 'ci', 'add', 'run', 'run-script', 'test', 't', 'start', 'exec',
   'dlx', 'create', 'x', 'rebuild', 'update', 'up', 'upgrade', 'link', 'unlink', 'install-test',
+  'uninstall', 'remove', 'rm', 'un', 'dedupe', 'ddp',
 ]);
 
 /** Leading tokens that prefix the real command without changing what it is. */
@@ -108,7 +109,7 @@ export const HOOK_SCRIPT = `#!/usr/bin/env node
 // through \`sandbox\` (install/run inside containment). Edit sandbox.config.json, not this.
 const PMS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const RUNNERS = new Set(['npx', 'pnpx', 'bunx']);
-const DANGEROUS = new Set(['install','i','ci','add','run','run-script','test','t','start','exec','dlx','create','x','rebuild','update','up','upgrade','link','unlink','install-test']);
+const DANGEROUS = new Set(['install','i','ci','add','run','run-script','test','t','start','exec','dlx','create','x','rebuild','update','up','upgrade','link','unlink','install-test','uninstall','remove','rm','un','dedupe','ddp']);
 const PREFIX = new Set(['sudo','command','exec','time','nice','env']);
 
 function programTokens(segment) {

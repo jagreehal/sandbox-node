@@ -2,7 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderRunArgs } from '../src/backend.js';
 import { SandboxConfigSchema } from '../src/config.js';
-import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type Mount } from '../src/plan.js';
+import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRemove, planRun, planUpdate, type Mount } from '../src/plan.js';
 import type { ProjectFacts } from '../src/project.js';
 
 const cfg = (over: object = {}) => SandboxConfigSchema.parse(over);
@@ -218,6 +218,23 @@ describe('planAdd', () => {
 
   it('keeps an explicit yarn range modifier instead of forcing exact', () => {
     expect(planAdd(cfg(), facts({ pm: 'yarn' }), ['--tilde', 'zod']).argv).toEqual(['corepack', 'yarn', 'add', '--tilde', 'zod']);
+  });
+});
+
+describe('planRemove', () => {
+  it('drops a dep write-class like add: manifest writable, persistence locked, no exact defaulting', () => {
+    const plan = planRemove(cfg(), facts({ pm: 'pnpm', hasPackageJson: true }), ['is-number']);
+    expect(find(plan.mounts, '/workspace/package.json')).toBeUndefined(); // inherits the writable root
+    expect(find(plan.mounts, '/workspace')?.readonly).toBe(false);
+    expect(find(plan.mounts, '/workspace/.github')?.readonly).toBe(true);
+    expect(plan.argv).toEqual(['corepack', 'pnpm', 'remove', 'is-number']);
+    expect(plan.interactive).toBe(false);
+  });
+
+  it('uses each package manager’s drop verb — npm `uninstall`, others `remove`', () => {
+    expect(planRemove(cfg(), facts({ pm: 'npm' }), ['lodash']).argv).toEqual(['npm', 'uninstall', 'lodash']);
+    expect(planRemove(cfg(), facts({ pm: 'yarn' }), ['react']).argv).toEqual(['corepack', 'yarn', 'remove', 'react']);
+    expect(planRemove(cfg(), facts({ pm: 'bun' }), ['left-pad']).argv).toEqual(['bun', 'remove', 'left-pad']);
   });
 });
 

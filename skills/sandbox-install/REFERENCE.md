@@ -14,18 +14,23 @@ The CLI picks the package manager from `package.json#packageManager` when presen
 lockfile. It then runs the script with the native syntax for that manager. When a script name
 collides with a sandbox command such as `build`, use `sandbox script build`.
 
-## `preflight` command (the review pass)
+## `check` / `preflight` command (the review pass)
 
 ```
+sandbox [gate flags] check  [pkgs… | file.json | <pm> <cmd> …]
 sandbox [gate flags] preflight [<pm> <cmd> …]
 ```
 
-Runs the same gates as a real install but **never installs**: it reports findings and exits
-non-zero when the matching install would have been blocked. The argument after
-`preflight` is routed like any pass-through command; omit it to check the current install
-surface (lockfile / direct deps).
+Runs the same gates as a real install but **never installs**, and needs **no Docker** — it only
+queries the registry + OSV. Reports findings and exits non-zero when the matching install would have
+been blocked. `check` always queries OSV (so advisories show without `--fail-on-advisory`; that flag
+only makes them *block*). `preflight` is the command-mirroring sibling.
 
-- `sandbox --min-release-age 7 preflight npm install` — check a plain install
+- `sandbox check express lodash@4` — bare package names (the friendly npq-style form)
+- `sandbox check` — the whole project: root manifest **+ every workspace package.json**, deduped
+- `sandbox check ./packages/api/package.json` — the deps in a specific manifest (workspace-aware for
+  a `package.json`; relative paths resolve from the current directory)
+- `sandbox --min-release-age 7 check npm install` — check a plain install (command form)
 - `sandbox --fail-on-advisory preflight pnpm add zod` — check what adding `zod` would pull
 - `sandbox preflight npx cowsay` — check the package a fetch-and-run would execute
 
@@ -96,7 +101,7 @@ Real preflight from `sandbox --json --fail-on-risk --fail-on-advisory --min-rele
 - `suggestions[]` → ready-to-run `pin` commands; prefer the narrowest override (`--allow-recent <pkg>`) over blanket (`--min-release-age 0`)
 - `deprecations[]` → maintainer-deprecated; blocks by default, re-run with `--allow-deprecated` only if the user insists
 
-## The gates (preflight)
+## The gates (check / preflight)
 
 The preflight resolves the registry once and runs every active gate over that result. It
 runs *before* the install and decides the exit code. Blocking precedence:
@@ -157,7 +162,9 @@ commands hit the real tool untouched.
 - `sandbox path install` — wire it (edits the rc, idempotent). `status` / `uninstall` / `print`
   manage it; `--shell zsh|bash|fish|pwsh` targets a specific shell.
 - `sandbox setup` offers to wire it interactively (one keypress).
-- Escape hatches: `command npm …` (one call) or `SANDBOX_OFF=1` (whole shell).
+- Escape hatches: `command npm …` (one call), `SANDBOX_OFF=1` (one command / a whole shell), or
+  `sandbox off` for a trusted repo (writes `off:true` to the git-ignored `sandbox.config.local.json`;
+  `sandbox on` re-enables). Turning it off from a personal layer warns loudly.
 - This is a **convenience guardrail, not a containment boundary**: it depends on the interactive
   shell. The protection is `sandbox` running the install in a container; for CI use
   `sandbox verify` + `--frozen --fail-on-egress`, for agents the `--agent` hook.

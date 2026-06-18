@@ -62,6 +62,17 @@ export function doctorExitCode(checks: Check[]): number {
   return checks.some((c) => c.level === 'fail') ? 1 : 0;
 }
 
+/**
+ * The one-line verdict printed under the per-check report — the "am I good to go?" answer at a glance.
+ * Failures point back at the report; an all-clear run names the next two commands so onboarding never
+ * dead-ends on a wall of green checks. Pure so the wording is testable without a daemon.
+ */
+export function doctorSummary(checks: Check[]): string {
+  const failures = checks.filter((c) => c.level === 'fail').length;
+  if (failures > 0) return `[fail] ${failures} ${failures === 1 ? 'check needs' : 'checks need'} attention — fix the above, then rerun: sandbox doctor`;
+  return "[ok] all clear — you're ready: `sandbox npm install`, then `sandbox dev`";
+}
+
 export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<number> {
   const checks: Check[] = [];
 
@@ -229,6 +240,8 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
   }
 
   for (const check of checks) print(check);
+  console.log('');
+  console.log(doctorSummary(checks));
 
   if (opts.fix) {
     const actions = autoFixActions(checks);

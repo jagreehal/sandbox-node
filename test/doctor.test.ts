@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoFixActions, doctorExitCode, type Check } from '../src/doctor.js';
+import { autoFixActions, doctorExitCode, doctorSummary, type Check } from '../src/doctor.js';
 
 const ok = (label: string): Check => ({ level: 'ok', label, detail: 'fine' });
 
@@ -45,5 +45,20 @@ describe('doctorExitCode', () => {
 
   it('is 1 when any check failed (a down daemon, a missing backend, a malformed config)', () => {
     expect(doctorExitCode([ok('config'), { level: 'fail', label: 'daemon', detail: 'not reachable' }])).toBe(1);
+  });
+});
+
+describe('doctorSummary', () => {
+  it('gives an all-clear verdict with the next commands when nothing failed (info is fine)', () => {
+    const summary = doctorSummary([ok('backend'), { level: 'info', label: 'image', detail: 'will build on first use' }]);
+    expect(summary).toContain('[ok]');
+    expect(summary).toContain('sandbox npm install');
+  });
+
+  it('counts failures and points back at the report', () => {
+    expect(doctorSummary([ok('config'), { level: 'fail', label: 'daemon', detail: 'down' }])).toBe(
+      '[fail] 1 check needs attention — fix the above, then rerun: sandbox doctor',
+    );
+    expect(doctorSummary([{ level: 'fail', label: 'backend', detail: 'x' }, { level: 'fail', label: 'daemon', detail: 'y' }])).toContain('2 checks need attention');
   });
 });

@@ -6,13 +6,14 @@ import type { PackageManager } from './package-manager.js';
  * three containment models — install / add / run — so the user never learns our
  * command vocabulary; they put `sandbox` in front of what they'd type anyway.
  *
- * `install`/`add` carry the explicitly-named `pm` so `sandbox pnpm add zod` honours
- * pnpm even if the lockfile probe would have guessed otherwise; `run` carries the
- * literal argv so it executes verbatim.
+ * `install`/`add`/`remove` carry the explicitly-named `pm` so `sandbox pnpm add zod`
+ * honours pnpm even if the lockfile probe would have guessed otherwise; `run` carries
+ * the literal argv so it executes verbatim.
  */
 export type Route =
   | { model: 'install'; pm: PackageManager; frozen: boolean; args: string[] }
   | { model: 'add'; pm: PackageManager; pkgs: string[] }
+  | { model: 'remove'; pm: PackageManager; pkgs: string[] }
   | { model: 'update'; pm: PackageManager; verb: string; args: string[] }
   | { model: 'auditFix'; pm: PackageManager; fixToken: string; args: string[] }
   | { model: 'auditSignatures'; pm: PackageManager; args: string[] }
@@ -32,6 +33,33 @@ const UPDATE_VERBS: Record<PackageManager, Set<string>> = {
   pnpm: new Set(['update', 'up', 'upgrade']),
   yarn: new Set(['upgrade', 'up']),
   bun: new Set(['update']),
+};
+
+/**
+ * `dedupe` reorganises the installed tree to share versions. It re-resolves against the registry to
+ * find dedupable versions, so it's install-class (registry egress) — a no-network `run` can't do it.
+ * It rides the `update` model (it can pull newer in-range versions, same as an update). bun has no
+ * dedupe; yarn's lives in Berry. npm also spells it `ddp`.
+ */
+const DEDUPE_VERBS: Record<PackageManager, Set<string>> = {
+  npm: new Set(['dedupe', 'ddp']),
+  pnpm: new Set(['dedupe']),
+  yarn: new Set(['dedupe']),
+  bun: new Set(),
+};
+
+/**
+ * Verbs that DROP a dependency — a deliberate manifest change like `add`, so it gets the same
+ * write-class containment (manifest writable, persistence locked, host creds out). It pulls nothing
+ * NEW from the registry, so unlike `add`/`update` there's no supply-chain surface to gate. Each PM's
+ * own aliases: npm `uninstall`/`remove`/`rm`/`un`, pnpm `remove`/`rm`/`uninstall`/`un`, yarn `remove`,
+ * bun `remove`/`rm`. (`unlink` is excluded — it un-symlinks a linked package, a different operation.)
+ */
+const REMOVE_VERBS: Record<PackageManager, Set<string>> = {
+  npm: new Set(['uninstall', 'remove', 'rm', 'un']),
+  pnpm: new Set(['remove', 'rm', 'uninstall', 'un']),
+  yarn: new Set(['remove']),
+  bun: new Set(['remove', 'rm']),
 };
 
 /** Other leaders that are always a `run` (dev servers, monorepo task runners, one-off tools, scripts).
@@ -87,6 +115,12 @@ function routePm(pm: PackageManager, rest: string[]): Route {
   // `npm update` / `pnpm up` / `yarn upgrade` / `bun update` → pulls newer versions: gate it.
   if (UPDATE_VERBS[pm].has(verb)) return { model: 'update', pm, verb, args: after };
 
+  // `npm/pnpm/yarn dedupe` → re-resolves the tree; install-class so it reaches the registry.
+  if (DEDUPE_VERBS[pm].has(verb)) return { model: 'update', pm, verb, args: after };
+
+  // `npm uninstall` / `pnpm remove` / `yarn remove` / `bun rm` → drop a dep inside containment.
+  if (REMOVE_VERBS[pm].has(verb)) return { model: 'remove', pm, pkgs: after };
+
   // run/test/dev/start/exec/dlx/… → run the command exactly as typed.
   return { model: 'run', argv: [pm, ...rest] };
 }
@@ -111,7 +145,7 @@ export function routePassthrough(argv: string[]): Route | undefined {
  * (`yarn global add …`), which routes to `run`, so match it explicitly on the leading token.
  */
 export function isGlobalInstall(cmd: string, route: Route, args: string[]): boolean {
-  const installClass = route.model === 'install' || route.model === 'add' || route.model === 'update';
+  const installClass = route.model === 'install' || route.model === 'add' || route.model === 'remove' || route.model === 'update';
   if (installClass && args.some((a) => a === '-g' || a === '--global' || a === '--location=global')) return true;
   if (cmd === 'yarn' && args[0] === 'global') return true;
   return false;

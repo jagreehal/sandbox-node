@@ -56,9 +56,35 @@ describe('cli (golden, no docker)', () => {
   it('prints help with all commands and globals', async () => {
     const { code, stdout } = await runCli(process.cwd(), ['help']);
     expect(code).toBe(0);
-    for (const token of ['init', 'setup', 'allow', 'preflight', 'doctor', 'build', 'install', 'add', 'run', 'shell', '--config', '--image', '--backend', '--dev', '--interactive', '--full-network', '--frozen', '--risk', '--fail-on-risk', '--json']) {
+    for (const token of ['init', 'setup', 'allow', 'check', 'preflight', 'doctor', 'build', 'install', 'add', 'remove', 'run', 'shell', '--config', '--image', '--backend', '--dev', '--interactive', '--full-network', '--frozen', '--risk', '--fail-on-risk', '--json']) {
       expect(stdout).toContain(token);
     }
+  });
+
+  it('SANDBOX_OFF runs the command on the host, no container', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' });
+    // `run -- node -e …` executes on the host when off; the marker proves no Docker was involved.
+    const { code, stdout, stderr } = await runCli(dir, ['run', '--', 'node', '-e', 'console.log("HOST-RAN")'], { SANDBOX_OFF: '1' });
+    expect(code).toBe(0);
+    expect(stdout).toContain('HOST-RAN');
+    expect(stderr).toContain('sandbox is OFF (SANDBOX_OFF)');
+  });
+
+  it('`sandbox off` git-ignores the personal override so it can\'t be committed for the whole team', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' }); // no init/setup run → no .gitignore yet
+    const { code, stderr } = await runCli(dir, ['off']);
+    expect(code).toBe(0);
+    expect(stderr).toContain('containment OFF');
+    expect(existsSync(path.join(dir, 'sandbox.config.local.json'))).toBe(true);
+    expect(readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('sandbox.config.local.json');
+  });
+
+  it('off via config passes a bare pass-through command through verbatim (npm ci stays npm ci)', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}', 'sandbox.config.json': '{"off":true}' });
+    const { code, stdout } = await runCli(dir, ['--dry-run', 'npm', 'ci']);
+    expect(code).toBe(0);
+    expect(stdout).toContain('off:true in config');
+    expect(stdout).toContain('npm ci'); // verbatim — not rewritten to `npm install`
   });
 
   it('surfaces registry risk hints before install and can block on them', async () => {
@@ -173,6 +199,87 @@ describe('cli (golden, no docker)', () => {
         expect(stderr).toContain('sandbox npm add left-pad@1.2.0'); // the concrete pin
         expect(stderr).toContain('would BLOCK this install');
         expect(stderr).not.toContain('sandbox delta'); // adding an explicit package is NOT a reproduce
+      },
+    );
+  });
+
+  it('`check <pkg>` audits a bare package name npq-style — no install, no backend', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await withRegistry(
+      {
+        'left-pad': {
+          name: 'left-pad',
+          'dist-tags': { latest: '1.3.0' },
+          time: { created: '2020-01-01T00:00:00.000Z', '1.2.0': '2024-01-01T00:00:00.000Z', '1.3.0': threeHoursAgo },
+          versions: { '1.2.0': {}, '1.3.0': {} },
+        },
+      },
+      async (url) => {
+        // Bare name, no `npm install` prefix — the friendly npq form. No --fail-on-advisory needed:
+        // `check` always queries, and --min-release-age makes the age gate block.
+        const { code, stderr } = await runCli(dir, ['--min-release-age', '7', 'check', 'left-pad'], { SANDBOX_NPM_REGISTRY: url });
+        expect(code).toBe(1);
+        expect(stderr).toContain('blocked by the release-age gate (min 7 days)');
+        expect(stderr).toContain('sandbox npm add left-pad@1.2.0');
+      },
+    );
+  });
+
+  it('`check` with no args audits EVERY workspace package.json in a monorepo', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'root', private: true, workspaces: ['packages/*'] }),
+      'packages/api/package.json': JSON.stringify({ name: 'api', dependencies: { 'left-pad': '1.3.0' } }),
+      'packages/web/package.json': JSON.stringify({ name: 'web', dependencies: { 'is-odd': '3.0.1' }, devDependencies: { api: 'workspace:*' } }),
+    });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const fresh = (latest: string) => ({ 'dist-tags': { latest }, time: { created: '2020-01-01T00:00:00.000Z', [latest]: threeHoursAgo }, versions: { [latest]: {} } });
+    await withRegistry(
+      { 'left-pad': { name: 'left-pad', ...fresh('1.3.0') }, 'is-odd': { name: 'is-odd', ...fresh('3.0.1') } },
+      async (url) => {
+        const { code, stdout } = await runCli(dir, ['--json', '--min-release-age', '7', 'check'], { SANDBOX_NPM_REGISTRY: url });
+        const out = JSON.parse(stdout);
+        expect(code).toBe(1);
+        const flagged = out.ageViolations.map((v: { name: string }) => v.name).sort();
+        expect(flagged).toEqual(['is-odd', 'left-pad']); // both workspaces, NOT the `workspace:*` local dep
+      },
+    );
+  });
+
+  it('`check <file>.json` audits the dependencies declared in that specific manifest', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'root', private: true, workspaces: ['packages/*'] }),
+      'packages/api/package.json': JSON.stringify({ name: 'api', dependencies: { 'left-pad': '1.3.0' } }),
+      'packages/web/package.json': JSON.stringify({ name: 'web', dependencies: { 'is-odd': '3.0.1' } }),
+    });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const fresh = (latest: string) => ({ 'dist-tags': { latest }, time: { created: '2020-01-01T00:00:00.000Z', [latest]: threeHoursAgo }, versions: { [latest]: {} } });
+    await withRegistry(
+      { 'left-pad': { name: 'left-pad', ...fresh('1.3.0') }, 'is-odd': { name: 'is-odd', ...fresh('3.0.1') } },
+      async (url) => {
+        // Only the api manifest → only left-pad is audited (is-odd lives in the web package).
+        const { code, stdout } = await runCli(dir, ['--json', '--min-release-age', '7', 'check', 'packages/api/package.json'], { SANDBOX_NPM_REGISTRY: url });
+        const out = JSON.parse(stdout);
+        expect(code).toBe(1);
+        expect(out.ageViolations.map((v: { name: string }) => v.name)).toEqual(['left-pad']);
+      },
+    );
+  });
+
+  it('`check package.json` from a workspace SUBDIRECTORY resolves the manifest relative to the caller, not the root', async () => {
+    const dir = fixture({
+      'package.json': JSON.stringify({ name: 'root', private: true, workspaces: ['packages/*'] }), // root: no registry deps
+      'packages/api/package.json': JSON.stringify({ name: 'api', dependencies: { 'left-pad': '1.3.0' } }),
+    });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    await withRegistry(
+      { 'left-pad': { name: 'left-pad', 'dist-tags': { latest: '1.3.0' }, time: { created: '2020-01-01T00:00:00.000Z', '1.3.0': threeHoursAgo }, versions: { '1.3.0': {} } } },
+      async (url) => {
+        // Run from packages/api with a bare `package.json` — must audit api's manifest, not the root's.
+        const { code, stdout } = await runCli(path.join(dir, 'packages', 'api'), ['--json', '--min-release-age', '7', 'check', 'package.json'], { SANDBOX_NPM_REGISTRY: url });
+        const out = JSON.parse(stdout);
+        expect(code).toBe(1); // would have been 0 (checked: 0) when resolving against the root
+        expect(out.ageViolations.map((v: { name: string }) => v.name)).toEqual(['left-pad']);
       },
     );
   });

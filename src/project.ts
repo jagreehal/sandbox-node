@@ -83,8 +83,12 @@ function readPackageScripts(cwd: string): Record<string, string> {
   }
 }
 
-function readDirectDependencies(cwd: string): DirectDependency[] {
-  const file = path.join(cwd, 'package.json');
+/**
+ * The direct dependencies declared in a specific manifest FILE (deps + devDeps + optionalDeps,
+ * deduped by name). Used both for the project probe and to audit a `package.json` passed explicitly
+ * to `sandbox check <file>.json`. Returns [] for a missing/unreadable file.
+ */
+export function readManifestDependencies(file: string): DirectDependency[] {
   if (!existsSync(file)) return [];
   try {
     const pkg = JSON.parse(readFileSync(file, 'utf8')) as PackageManifest;
@@ -98,6 +102,10 @@ function readDirectDependencies(cwd: string): DirectDependency[] {
   } catch {
     return [];
   }
+}
+
+function readDirectDependencies(cwd: string): DirectDependency[] {
+  return readManifestDependencies(path.join(cwd, 'package.json'));
 }
 
 /**
@@ -183,7 +191,7 @@ function expandWorkspaceGlob(rootDir: string, glob: string): string[] {
  * is a no-op there. Local (`workspace:`/`file:`/`link:`) specs survive here but are dropped when the
  * risk targets are built — see `riskTargetsForInstall`.
  */
-function readWorkspaceDependencies(rootDir: string): DirectDependency[] {
+export function readWorkspaceDependencies(rootDir: string): DirectDependency[] {
   const dirs = [rootDir];
   for (const glob of workspaceGlobs(rootDir)) dirs.push(...expandWorkspaceGlob(rootDir, glob));
   const byName = new Map<string, string>();
