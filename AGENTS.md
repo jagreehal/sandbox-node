@@ -74,7 +74,13 @@ This is the product's personality. Hold the bar:
 
 ## Skills (`skills/`)
 
-These are skills for agents that *use* sandbox, not for working on this repo. The flagship is [`skills/sandbox-install/SKILL.md`](skills/sandbox-install/SKILL.md): the human-in-the-loop install workflow (review with `check`, map findings to recommended actions, install with only the approved overrides). When you change a gate, a flag, or a finding format, update that skill and its `REFERENCE.md` in the same change — a stale skill teaches the wrong flags.
+These are skills for agents that *use* sandbox, not for working on this repo. Three, one per workflow:
+
+- [`sandbox-install`](skills/sandbox-install/SKILL.md) — the flagship: human-in-the-loop install (review with `check`, map findings to recommended actions, install with only the approved overrides). Has its own `REFERENCE.md`.
+- [`sandbox-agent-isolation`](skills/sandbox-agent-isolation/SKILL.md) — contain the agent itself (host PreToolUse hook via `init --agent`, or `devcontainer init`).
+- [`sandbox-ci`](skills/sandbox-ci/SKILL.md) — the read-only CI/cron gates (`verify`, `delta`, `scan`, `secrets`).
+
+When you change a gate, a flag, a finding format, or a command surface, update the affected skill in the same change — a stale skill teaches the wrong flags. Keep flags cited in skills real (cross-check against `cli.ts` / `docs/reference.md`).
 
 ## Releasing
 
