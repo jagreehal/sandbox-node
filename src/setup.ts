@@ -26,6 +26,19 @@ export function backendStartHint(backend: 'docker' | 'podman'): string {
   return backend === 'docker' ? 'sudo systemctl start docker' : 'start the Podman service or machine for this host';
 }
 
+/**
+ * Friendly guidance when a contained run fails because the runtime is missing or its daemon is down —
+ * the same install/start hints `setup` and `doctor` give. `probe` is the result of the cheap checks
+ * the CLI runs only on the failure path. Returns the problem line first, then the fixes, or undefined
+ * when the backend looks healthy (so an unrelated error surfaces unchanged). Pure → testable.
+ */
+export function backendDownGuidance(probe: { installed: boolean; daemonUp: boolean }, backend: 'docker' | 'podman'): string[] | undefined {
+  const rerun = 'then re-run, or check your setup with:  sandbox doctor';
+  if (!probe.installed) return [`${backend} isn't installed (or not on your PATH) — that's why this couldn't run`, `install it:  ${backendInstallHint(backend)}`, rerun];
+  if (!probe.daemonUp) return [`the ${backend} daemon isn't running — that's why this couldn't run`, `start it:  ${backendStartHint(backend)}`, rerun];
+  return undefined;
+}
+
 export async function runSetup(cwd: string, opts: SetupOptions): Promise<number> {
   const configPath = path.join(cwd, 'sandbox.config.json');
   const preset = (opts.preset ?? 'balanced') as PresetName;

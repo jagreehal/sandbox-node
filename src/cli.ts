@@ -19,7 +19,7 @@ import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } f
 import { runDoctor } from './doctor.js';
 import { execute, type ExecuteResult } from './execute.js';
 import { quiet } from './exec.js';
-import { classifyCommand } from './tamper.js';
+import { classifyCommand, containedSuccessLine } from './tamper.js';
 import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
 import { ensureLocalConfigIgnored, runInit } from './init.js';
 import { log } from './log.js';
@@ -35,9 +35,9 @@ import { runDelta } from './delta.js';
 import { feedCacheDir, loadKnownBad, PROJECT_ADVISORY_NAME, updateFeeds, type KnownBadHit } from './known-bad.js';
 import { scanSecrets, type SecretFinding } from './secrets.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
-import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
+import { execPackageTargets, parseLockfilePackages, parsePackageTargets, planRiskHintLog, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
-import { backendInstallHint, backendStartHint, runSetup } from './setup.js';
+import { backendDownGuidance, runSetup } from './setup.js';
 import { makeCanary } from './canary.js';
 import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
@@ -436,13 +436,9 @@ function hostCommandFor(cmd: string, args: string[], route: Route): string[] {
  * the failure path, so a healthy run pays nothing.
  */
 async function explainBackendDown(bin: string, backend: 'docker' | 'podman'): Promise<string[] | undefined> {
-  if ((await quiet(bin, ['--version'])) !== 0) {
-    return [`${backend} isn't installed (or not on your PATH) — that's why this couldn't run`, `install it:  ${backendInstallHint(backend)}`, 'then re-run, or check your setup with:  sandbox doctor'];
-  }
-  if ((await quiet(bin, ['info'])) !== 0) {
-    return [`the ${backend} daemon isn't running — that's why this couldn't run`, `start it:  ${backendStartHint(backend)}`, 'then re-run, or check your setup with:  sandbox doctor'];
-  }
-  return undefined;
+  const installed = (await quiet(bin, ['--version'])) === 0;
+  const daemonUp = installed && (await quiet(bin, ['info'])) === 0;
+  return backendDownGuidance({ installed, daemonUp }, backend);
 }
 
 /** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
@@ -579,49 +575,13 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
   }
 }
 
-function formatRiskPackage(hint: RiskHint): string {
-  return `${hint.package}${hint.version ? `@${hint.version}` : ''}`;
-}
-
-function riskDetailLine(hint: RiskHint): string {
-  if (hint.code === 'bin_exposed') return `adds bin: ${hint.detail.bin}`;
-  if (hint.code === 'recent_version') return hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
-  // High-signal codes (typosquat, provenance regression, maintainer takeover, expired domain) are
-  // error-level — flag them with the same `!!` emphasis as a very-fresh version.
-  return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
-}
-
 /**
- * Print the registry risk hints. `contained` flips the closing line between the two contexts that
- * share this code: the install/run path (true) is about to run the install inside the container, so
- * we say so and reassure once; `check`/`preflight` (false) only looked at the registry, so claiming
- * containment there would be a lie — it tells the user nothing was installed instead.
+ * Emit the registry risk-hint report. The decision (what to print, at what level, and the
+ * invisible-when-clean behaviour) lives in {@link planRiskHintLog} so it stays testable; this just
+ * routes each line to the matching logger method.
  */
-function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], { contained }: { contained: boolean } = { contained: true }): void {
-  const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
-  const checked = targets.length ? `checked ${targets.length} package${targets.length === 1 ? '' : 's'} for registry risk hints` : undefined;
-  if (!hints.length) {
-    // Nothing flagged. On the install path the gate stays invisible (debug) — good security gets out
-    // of the way. An explicit `check` still says it looked, since confirming that is why it was run.
-    if (checked) (contained ? log.debug : log.info)(checked);
-    return;
-  }
-  if (checked) log.info(checked);
-  log.warn(`${hints.length} thing${hints.length === 1 ? '' : 's'} worth a look before installing`);
-  const grouped = new Map<string, RiskHint[]>();
-  for (const hint of hints) {
-    const key = formatRiskPackage(hint);
-    grouped.set(key, [...(grouped.get(key) ?? []), hint]);
-  }
-  for (const [pkg, pkgHints] of grouped) {
-    const level = pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
-    const lines = [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint)}`)];
-    if (level === 'error') log.error(lines.join('\n'));
-    else log.warn(lines.join('\n'));
-  }
-  // One plain "why this is fine" line, instead of repeating "still contained" on every hint above.
-  if (contained) log.info("heads-up only — the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing.");
-  else log.info('heads-up only — this was a check, so nothing was installed or downloaded. Run the install when you\'re ready.');
+function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], opts: { contained: boolean } = { contained: true }): void {
+  for (const { level, text } of planRiskHintLog(targets.length, allHints, opts)) log[level](text);
 }
 
 /**
@@ -1780,9 +1740,8 @@ async function main(): Promise<number> {
         // One calm, confident close after a clean dependency op: make the invisible protection legible
         // once. Only for install-class commands that succeeded — a dev server or a failed run says its
         // own thing. `classifyCommand` returns 'other' for run/scripts, so those stay quiet.
-        if (result.code === 0 && classifyCommand(plan.argv) !== 'other') {
-          log.info('✓ done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir');
-        }
+        const successNote = containedSuccessLine(result.code, plan.argv);
+        if (successNote) log.info(successNote);
         return result.code;
       }
       const deniedHosts = [...new Set(result.deniedHosts)].sort();

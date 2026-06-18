@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ProjectFacts } from '../src/project.js';
-import { checkReleaseAge, checkReleaseAgeDeep, collectRiskHints, createRegistryClient, execPackageTargets, isExcluded, parsePackageTargets, readAllPackagesFromLockfile, readDirectVersionsFromLockfile, REGISTRY_TIMEOUT_MS, releaseAgeViolations, resolveRiskTargets, riskTargetsForInstall, riskTargetsForUpdate, suggestAgedVersion, type RegistryClient, type ResolvedTarget } from '../src/risk.js';
+import { checkReleaseAge, checkReleaseAgeDeep, collectRiskHints, createRegistryClient, execPackageTargets, isExcluded, parsePackageTargets, planRiskHintLog, readAllPackagesFromLockfile, readDirectVersionsFromLockfile, REGISTRY_TIMEOUT_MS, releaseAgeViolations, resolveRiskTargets, riskTargetsForInstall, riskTargetsForUpdate, suggestAgedVersion, type RegistryClient, type RiskHint, type ResolvedTarget } from '../src/risk.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -537,3 +537,39 @@ describe('suggestAgedVersion — the known-good older version to pin', () => {
     expect(await suggestAgedVersion('left-pad', DAY_MS, { client: down, now })).toBeUndefined();
   });
 });
+
+describe('planRiskHintLog — invisible when clean, clear when not', () => {
+  const recent: RiskHint = { level: 'error', code: 'recent_version', package: 'sharp', version: '0.99.0', message: 'very recently published 2 hours ago — fresh releases are the supply-chain worm window', detail: { severity: 'strong' } as never };
+  const bin: RiskHint = { level: 'warn', code: 'bin_exposed', package: 'sharp', version: '0.99.0', message: '', detail: { bin: 'sharp -> ./cli.js' } };
+
+  it('stays SILENT on the install path when nothing is flagged (debug, not info)', () => {
+    const lines = planRiskHintLog(3, [], { contained: true });
+    expect(lines).toEqual([{ level: 'debug', text: 'checked 3 packages for registry risk hints' }]);
+  });
+
+  it('still CONFIRMS the look on an explicit check when nothing is flagged (info)', () => {
+    const lines = planRiskHintLog(3, [], { contained: false });
+    expect(lines).toEqual([{ level: 'info', text: 'checked 3 packages for registry risk hints' }]);
+  });
+
+  it('emits nothing at all when there were no targets and no hints', () => {
+    expect(planRiskHintLog(0, [], { contained: true })).toEqual([]);
+  });
+
+  it('groups hints per package and closes with the contained "heads-up only" line', () => {
+    const lines = planRiskHintLog(1, [recent, bin], { contained: true });
+    expect(lines[0]).toEqual({ level: 'info', text: 'checked 1 package for registry risk hints' });
+    expect(lines[1]).toEqual({ level: 'warn', text: '2 things worth a look before installing' }); // count is total hints, even when grouped under one package
+    // recent_version is error-level → the package block is error, with both hints grouped under it.
+    expect(lines[2]!.level).toBe('error');
+    expect(lines[2]!.text).toContain('sharp@0.99.0');
+    expect(lines[2]!.text).toContain('!! very recently published'); // strong recent_version gets the !! emphasis
+    expect(lines[2]!.text).toContain('adds bin: sharp -> ./cli.js');
+    expect(lines.at(-1)).toEqual({ level: 'info', text: expect.stringContaining('throwaway container') as unknown as string });
+  });
+
+  it('closes with the check-context line (nothing installed) when not contained', () => {
+    const lines = planRiskHintLog(1, [bin], { contained: false });
+    expect(lines.at(-1)!.text).toContain('nothing was installed or downloaded');
+  });
+})

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Resolver } from 'node:dns/promises';
+import type { LogLevel } from './log.js';
 import { lockfileName, type PackageManager } from './package-manager.js';
 import type { ProjectFacts } from './project.js';
 
@@ -65,6 +66,59 @@ export type RiskCode = RiskHint['code'];
 export interface RiskTarget {
   name: string;
   spec: string;
+}
+
+/** One line the CLI should emit at the given log level — the rendered risk-hint report. */
+export interface RiskLogLine {
+  level: LogLevel;
+  text: string;
+}
+
+function formatRiskPackage(hint: RiskHint): string {
+  return `${hint.package}${hint.version ? `@${hint.version}` : ''}`;
+}
+
+function riskDetailLine(hint: RiskHint): string {
+  if (hint.code === 'bin_exposed') return `adds bin: ${hint.detail.bin}`;
+  if (hint.code === 'recent_version') return hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
+  // High-signal codes (typosquat, provenance regression, maintainer takeover, expired domain) are
+  // error-level — flag them with the same `!!` emphasis as a very-fresh version.
+  return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
+}
+
+/**
+ * Decide what the risk-hint report should print, and at what level — pure, so the "invisible when
+ * clean" behaviour is testable without a logger. `contained` is the call site: the install path
+ * (true) is about to run inside the box, so a clean check stays out of the way at `debug`; an
+ * explicit `check` (false) confirms it looked, since that's the whole reason it was run.
+ */
+export function planRiskHintLog(targetCount: number, allHints: RiskHint[], { contained }: { contained: boolean }): RiskLogLine[] {
+  const out: RiskLogLine[] = [];
+  const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
+  const checked = targetCount ? `checked ${targetCount} package${targetCount === 1 ? '' : 's'} for registry risk hints` : undefined;
+  if (!hints.length) {
+    if (checked) out.push({ level: contained ? 'debug' : 'info', text: checked });
+    return out;
+  }
+  if (checked) out.push({ level: 'info', text: checked });
+  out.push({ level: 'warn', text: `${hints.length} thing${hints.length === 1 ? '' : 's'} worth a look before installing` });
+  const grouped = new Map<string, RiskHint[]>();
+  for (const hint of hints) {
+    const key = formatRiskPackage(hint);
+    grouped.set(key, [...(grouped.get(key) ?? []), hint]);
+  }
+  for (const [pkg, pkgHints] of grouped) {
+    const level: LogLevel = pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
+    out.push({ level, text: [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint)}`)].join('\n') });
+  }
+  // One plain "why this is fine" line, instead of repeating "still contained" on every hint above.
+  out.push({
+    level: 'info',
+    text: contained
+      ? "heads-up only — the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing."
+      : "heads-up only — this was a check, so nothing was installed or downloaded. Run the install when you're ready.",
+  });
+  return out;
 }
 
 export interface RegistryClient {
