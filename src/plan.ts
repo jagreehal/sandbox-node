@@ -258,6 +258,17 @@ export function planAdd(config: SandboxConfig, facts: ProjectFacts, pkgs: string
 }
 
 /**
+ * Drop a dependency (`npm uninstall`, `pnpm/yarn/bun remove`). A deliberate manifest change like
+ * `add`, so it gets the same write-class containment: package.json writable, persistence paths and
+ * host credentials locked out, and the removed package's uninstall lifecycle scripts run in the box,
+ * not against your real home dir. Egress stays the install-class default-deny allowlist for the PM's
+ * own lockfile re-resolution — it fetches nothing new (the gate-it-before-install surface is empty).
+ */
+export function planRemove(config: SandboxConfig, facts: ProjectFacts, pkgs: string[], opts: PlanOptions = {}): RunPlan {
+  return planInstallClassMutation(config, facts, pmArgv(facts.pm, 'remove', pkgs), opts);
+}
+
+/**
  * Update existing deps to newer versions (`npm update`, `pnpm up`, `yarn upgrade`, `bun update`).
  * Install-class: registry egress (default-deny allowlist) so it can resolve, and manifest writable
  * like `add` — `--save`/`--latest` rewrite ranges, and update is itself a deliberate dep change.

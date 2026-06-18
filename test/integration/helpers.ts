@@ -32,9 +32,14 @@ export interface CliResult {
 /** Run the built CLI in `cwd` and capture its output. */
 export function runCli(cwd: string, args: string[], env: Record<string, string> = {}): Promise<CliResult> {
   return new Promise((resolve) => {
+    // Scrub SANDBOX_OFF from the inherited env: the CLI now honours it (off → run on the host), so a
+    // dev/CI shell that happens to export it would otherwise turn EVERY containment test into a
+    // passthrough. Tests that exercise the off path re-add it via the `env` override below.
+    const baseEnv = { ...process.env };
+    delete baseEnv.SANDBOX_OFF;
     const child = spawn(process.execPath, [resolveCli(), ...args], {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...baseEnv, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

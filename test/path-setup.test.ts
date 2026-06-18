@@ -44,7 +44,7 @@ describe('wrapper / dispatch consistency', () => {
   // Every verb the shell wrapper redirects MUST be an install-class (mutating) route in the
   // real router — otherwise the wrapper would sandbox something `sandbox <pm>` treats as a plain
   // host command. This fails if dispatch's verb sets and WRAP_VERBS ever drift apart.
-  const MUTATING = new Set(['install', 'add', 'update', 'auditFix']);
+  const MUTATING = new Set(['install', 'add', 'remove', 'update', 'auditFix']);
   it('only redirects verbs the router treats as install-class', () => {
     for (const pm of Object.keys(WRAP_VERBS) as PackageManager[]) {
       for (const verb of WRAP_VERBS[pm]) {

@@ -15,8 +15,8 @@ export function isCompletionShell(value: string): value is CompletionShell {
  * checks each entry appears in the script, so add new commands here when they land.
  */
 export const SANDBOX_COMMANDS = [
-  'init', 'setup', 'allow', 'path', 'doctor', 'build', 'verify', 'scan', 'secrets', 'feeds', 'delta', 'preflight', 'approve-builds',
-  'badge', 'devcontainer', 'completion', 'shell', 'install', 'add', 'run', 'update', 'upgrade', 'audit', 'dev', 'script', 'help', 'version',
+  'init', 'setup', 'allow', 'off', 'on', 'path', 'doctor', 'build', 'verify', 'scan', 'secrets', 'feeds', 'delta', 'check', 'preflight', 'approve-builds',
+  'badge', 'devcontainer', 'completion', 'shell', 'install', 'add', 'remove', 'run', 'x', 'update', 'upgrade', 'audit', 'dev', 'script', 'help', 'version',
   'npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx', 'node', 'tsx', 'turbo', 'nx',
 ] as const;
 

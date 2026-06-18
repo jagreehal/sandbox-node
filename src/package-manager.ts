@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
-export type InstallMode = 'install' | 'add';
+export type InstallMode = 'install' | 'add' | 'remove';
 
 const LOCKFILES: Record<PackageManager, string> = {
   npm: 'package-lock.json',
@@ -97,11 +97,24 @@ function defaultExactArgs(pm: PackageManager, args: string[]): string[] {
 }
 
 /**
- * The command to run inside the container. npm uses `install` for both modes
- * (`npm install <pkg>` adds); pnpm/yarn/bun use `add`. Dependency adds are saved as exact
- * versions by default across all package managers; explicit yarn range flags still win.
+ * The command to run inside the container. npm uses `install` for both install/add
+ * (`npm install <pkg>` adds) and `uninstall` to drop a dep; pnpm/yarn/bun use `add` / `remove`.
+ * Dependency adds are saved as exact versions by default across all package managers (explicit
+ * yarn range flags still win); removes pull nothing new, so no exact-version defaulting applies.
  */
 export function pmArgv(pm: PackageManager, mode: InstallMode, args: string[]): string[] {
+  if (mode === 'remove') {
+    switch (pm) {
+      case 'npm':
+        return ['npm', 'uninstall', ...args];
+      case 'pnpm':
+        return ['corepack', 'pnpm', 'remove', ...args];
+      case 'yarn':
+        return ['corepack', 'yarn', 'remove', ...args];
+      case 'bun':
+        return ['bun', 'remove', ...args];
+    }
+  }
   const verb = mode === 'add' ? 'add' : 'install';
   const rest = mode === 'add' ? defaultExactArgs(pm, args) : args;
   switch (pm) {
@@ -114,6 +127,16 @@ export function pmArgv(pm: PackageManager, mode: InstallMode, args: string[]): s
     case 'bun':
       return ['bun', verb, ...rest];
   }
+}
+
+/**
+ * The local-first package runner for `sandbox x <tool>` — the muscle-memory shortcut for
+ * `npx`/`bunx` that resolves `node_modules/.bin` first and fetches from the registry only as a
+ * fallback. bun projects get `bunx` (its native runner); everyone else gets `npx`, which always
+ * ships with the container's Node and works regardless of the project's package manager.
+ */
+export function pmExecArgv(pm: PackageManager, args: string[]): string[] {
+  return pm === 'bun' ? ['bunx', ...args] : ['npx', ...args];
 }
 
 /**

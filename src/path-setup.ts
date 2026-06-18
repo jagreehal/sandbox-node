@@ -35,10 +35,10 @@ const VERSION_LINE = `# sandbox-path-version: ${PATH_WRAPPER_VERSION}`;
  * (the verb is `audit`, the fix is the next token), and bare `yarn` (= `yarn install`) too.
  */
 export const WRAP_VERBS: Record<PackageManager, readonly string[]> = {
-  npm: ['install', 'i', 'ci', 'add', 'update', 'up', 'upgrade'],
-  pnpm: ['install', 'i', 'add', 'update', 'up', 'upgrade'],
-  yarn: ['install', 'add', 'up', 'upgrade'],
-  bun: ['install', 'i', 'add', 'update'],
+  npm: ['install', 'i', 'ci', 'add', 'update', 'up', 'upgrade', 'uninstall', 'remove', 'rm', 'un', 'dedupe', 'ddp'],
+  pnpm: ['install', 'i', 'add', 'update', 'up', 'upgrade', 'remove', 'rm', 'uninstall', 'un', 'dedupe'],
+  yarn: ['install', 'add', 'up', 'upgrade', 'remove', 'dedupe'],
+  bun: ['install', 'i', 'add', 'update', 'remove', 'rm'],
 };
 
 /**

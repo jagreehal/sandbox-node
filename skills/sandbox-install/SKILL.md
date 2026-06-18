@@ -1,17 +1,20 @@
 ---
 name: sandbox-install
-description: Human-in-the-loop secure install for npm/pnpm/yarn/bun deps, driven by the `sandbox` CLI (@jagreehal/sandbox-node). Runs a read-only `preflight` review pass that reports supply-chain risk WITHOUT installing, surfaces each finding with a recommended action (including a concrete older version to pin), lets the user choose, then runs the real install with the matching flags. Use when the user wants to install, add, or update dependencies safely, vet a package before installing, review supply-chain risk (fresh releases, OSV advisories, known malware), or asks to "sandbox install" something.
+description: Human-in-the-loop secure install for npm/pnpm/yarn/bun deps, driven by the `sandbox` CLI (@jagreehal/sandbox-node). Runs a read-only `check` review pass (npq-style, no Docker) that reports supply-chain risk WITHOUT installing, surfaces each finding with a recommended action (including a concrete older version to pin), lets the user choose, then runs the real install with the matching flags. Use when the user wants to install, add, remove, or update dependencies safely, vet a package before installing, review supply-chain risk (fresh releases, OSV advisories, known malware), or asks to "sandbox install" / "check this package".
 ---
 
 # sandbox-install
 
 The `sandbox` CLI runs package installs inside a container (no host creds, egress
-default-deny, lifecycle scripts contained) and ships a supply-chain preflight. This skill
+default-deny, lifecycle scripts contained) and ships a supply-chain review pass. This skill
 is the **interactive front-end**: the CLI is pure flags, and you (the agent) are the
 human-in-the-loop. You drive the flags; the user makes the risk calls.
 
-The `preflight` command runs the gates and reports findings **without installing anything**.
-Run the review pass first, then run the real install once the user has cleared the risk.
+The `check` command runs the gates and reports findings **without installing anything** (and
+needs no Docker — it only queries the registry + OSV). Run the review pass first, then run the
+real install once the user has cleared the risk. `check` takes bare package names the friendly
+way (`sandbox check express lodash@4`); `preflight` is the same review keyed to a full command
+(`preflight npm install …`). Both accept the same gate flags below.
 
 ## Workflow
 
@@ -32,26 +35,39 @@ Run the review pass first, then run the real install once the user has cleared t
    binaries during `postinstall`, the interactive `sandbox init` picker can pre-allow the
    `build-tools` egress bundle so those installs don't block on the first run (see step 4).
 
-2. **Review pass: check WITHOUT installing.** Use the `preflight` command: it runs the
-   gates over what the command would pull and **never installs**, so run it first.
+2. **Review pass: check WITHOUT installing.** Use `check`: it runs the gates over what would be
+   pulled and **never installs** (no Docker needed), so run it first. It always queries OSV, so you
+   don't need `--fail-on-advisory` just to *see* advisories — add the gate flags only to *block*.
 
    ```
-   sandbox --json --fail-on-risk --fail-on-advisory --min-release-age 7 preflight <pm> install [pkgs]
+   sandbox --json --fail-on-risk --fail-on-advisory --min-release-age 7 check [pkgs]
    ```
+
+   - `sandbox check express lodash@4` — bare package names (the friendly form).
+   - `sandbox check` (no args) — audits the whole project: the root manifest **and every workspace
+     package.json** in a monorepo, deduped.
+   - `sandbox check ./packages/api/package.json` — the deps in a specific manifest (a `package.json`
+     is read workspace-aware; relative paths resolve from your current directory).
+   - `sandbox --fail-on-advisory check npm install zod` — the command-mirroring form (`preflight` is
+     the same).
 
    **Reproducing an existing committed lockfile (CI, a fresh clone, a frozen install)?** A bare
-   `preflight <pm> install` gates *every* dependency, so an actively-maintained project trips the
+   `check` / `preflight <pm> install` gates *every* dependency, so an actively-maintained project trips the
    release-age gate on packages that are already committed and vetted — noise, not new risk. For that
    case run `sandbox delta` instead: it diffs the lockfile against the merge base (default
    `origin/main`) and gates only the added/bumped versions, i.e. exactly what a change introduces.
-   When a bare-install preflight blocks on release-age, its output now points here too. Reserve the
-   full `preflight <pm> install [pkgs]` for when you are genuinely adding packages.
+   When a bare-install review blocks on release-age, its output now points here too. Reserve the
+   full `check [pkgs]` for when you are genuinely adding packages.
 
    - Exit **0** → no blocking findings. Go to step 4 and run the real install.
    - Exit **1** → would block. Read the findings and go to step 3.
    - `--json` returns a structured report: `{ blocked, checked, hints, ageViolations,
      advisoryHits, suggestions }`. Each `suggestions[]` entry has a ready-to-run `pin`
      command (e.g. `sandbox npm add left-pad@1.2.0`). Drop `--json` for human-readable lines.
+
+   **Removing a dependency** (`sandbox <pm> remove <pkg>` / `npm uninstall`) needs no review pass —
+   it fetches nothing new — but still runs contained, so the removed package's uninstall scripts
+   can't touch the host. Just run it.
 
 3. **Map each finding to a recommended action**, then present them to the user (use
    AskUserQuestion when there's a clear choice; recommend the safe default first):
@@ -64,7 +80,7 @@ Run the review pass first, then run the real install once the user has cleared t
    | Risk hint (`bin_exposed`, `recent_version`) | yes (under `--fail-on-risk`) | Informational — usually proceed | drop `--fail-on-risk`, then `sandbox <pm> install` |
    | Advisory, **non-malware** (`— advisory <ids>`) | **no — warn only** | Surface it; there's no flag that blocks on it | — (see note) |
 
-   **Non-malware advisory caveat:** these never change the exit code. `preflight` still
+   **Non-malware advisory caveat:** these never change the exit code. `check` still
    reports them (in `advisoryHits[]`) without installing, so you can surface one and let the
    user decide before step 4. There is no dedicated "block on any advisory" flag — say so
    plainly rather than implying one exists.
@@ -78,7 +94,7 @@ Run the review pass first, then run the real install once the user has cleared t
      (`sandbox <pm> add <pkg>@<version>`)
    - Abort → stop; nothing was installed.
 
-   **If the install itself blocks on egress** (not a preflight finding; a `postinstall` tried to
+   **If the install itself blocks on egress** (not a review finding; a `postinstall` tried to
    reach a host that isn't on the allowlist), the proxy reports the blocked host. When it's a known
    **build host** (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron
    binaries), re-run with `--allow-build-hosts`: it adds the curated native-build hosts for that run

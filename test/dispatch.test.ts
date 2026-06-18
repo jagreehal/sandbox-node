@@ -41,6 +41,28 @@ describe('routePassthrough — add', () => {
   });
 });
 
+describe('routePassthrough — remove', () => {
+  it('routes each package manager’s drop-a-dep verbs (and aliases) to the contained remove model', () => {
+    expect(route('npm uninstall lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
+    expect(route('npm remove lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
+    expect(route('npm rm lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
+    expect(route('npm un lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
+    expect(route('pnpm remove zod')).toEqual({ model: 'remove', pm: 'pnpm', pkgs: ['zod'] });
+    expect(route('pnpm rm zod')).toEqual({ model: 'remove', pm: 'pnpm', pkgs: ['zod'] });
+    expect(route('yarn remove react react-dom')).toEqual({ model: 'remove', pm: 'yarn', pkgs: ['react', 'react-dom'] });
+    expect(route('bun remove left-pad')).toEqual({ model: 'remove', pm: 'bun', pkgs: ['left-pad'] });
+    expect(route('bun rm left-pad')).toEqual({ model: 'remove', pm: 'bun', pkgs: ['left-pad'] });
+  });
+
+  it('leaves `npm unlink` a plain run — un-symlinking a linked pkg is not a remove', () => {
+    expect(route('npm unlink some-pkg')).toEqual({ model: 'run', argv: ['npm', 'unlink', 'some-pkg'] });
+  });
+
+  it('does NOT treat yarn `rm`/`un` as remove (yarn spells it only `remove`)', () => {
+    expect(route('yarn rm zod')).toEqual({ model: 'run', argv: ['yarn', 'rm', 'zod'] });
+  });
+});
+
 describe('routePassthrough — update', () => {
   it('routes the update family to the gated update model, per package manager', () => {
     expect(route('npm update')).toEqual({ model: 'update', pm: 'npm', verb: 'update', args: [] });
@@ -59,6 +81,17 @@ describe('routePassthrough — update', () => {
 
   it('does NOT treat `bun upgrade` as a package update — it upgrades the bun binary, so it stays a run', () => {
     expect(route('bun upgrade')).toEqual({ model: 'run', argv: ['bun', 'upgrade'] });
+  });
+
+  it('routes `dedupe` (and npm `ddp`) install-class so it can re-resolve against the registry', () => {
+    expect(route('npm dedupe')).toEqual({ model: 'update', pm: 'npm', verb: 'dedupe', args: [] });
+    expect(route('npm ddp')).toEqual({ model: 'update', pm: 'npm', verb: 'ddp', args: [] });
+    expect(route('pnpm dedupe')).toEqual({ model: 'update', pm: 'pnpm', verb: 'dedupe', args: [] });
+    expect(route('yarn dedupe')).toEqual({ model: 'update', pm: 'yarn', verb: 'dedupe', args: [] });
+  });
+
+  it('leaves `bun dedupe` a plain run — bun has no dedupe verb', () => {
+    expect(route('bun dedupe')).toEqual({ model: 'run', argv: ['bun', 'dedupe'] });
   });
 });
 
@@ -154,6 +187,11 @@ describe('isGlobalInstall — global installs across every package manager', () 
 
   it('flags yarn classic global subcommand (routes to run, not an install flag)', () => {
     expect(isGlobal('yarn', 'global add typescript')).toBe(true);
+  });
+
+  it('flags a global REMOVE too — uninstalling a host global cannot happen in a container', () => {
+    expect(isGlobal('npm', 'uninstall -g typescript')).toBe(true);
+    expect(isGlobal('pnpm', 'remove --global typescript')).toBe(true);
   });
 
   it('leaves normal (local) installs alone', () => {

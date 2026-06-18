@@ -33,6 +33,15 @@ export const SandboxConfigSchema = z
     image: z.string().default('node-install-sandbox:latest'),
     /** Check npm for a newer `sandbox` once a day and print a notice (set false to opt the project out). */
     updateCheck: z.boolean().default(true),
+    /**
+     * Turn containment OFF for this project: every operation command (`install`/`add`/`run`/`dev`/the
+     * pass-through `sandbox npm …`) runs directly on the host, exactly as if you'd typed it without
+     * `sandbox`. The escape hatch for a repo you trust — commit it in `sandbox.config.json`, or set it
+     * only for yourself in `sandbox.config.local.json` — so a globally-wired `sandbox path install`
+     * stops sandboxing here. The env var `SANDBOX_OFF=1` does the same for one command or one shell.
+     * Sandbox-only commands (`check`, `doctor`, `init`, `verify`, …) keep working regardless.
+     */
+    off: z.boolean().default(false),
     grants: z
       .object({
         'ssh-agent': z.boolean().default(false),
@@ -276,6 +285,23 @@ export function localConfigPath(projectFile: string): string {
   return path.join(path.dirname(projectFile), LOCAL_CONFIG_NAME);
 }
 
+/**
+ * Flip the `off` escape hatch in the personal local override, preserving any other keys already
+ * there. `sandbox off` / `sandbox on` write this so the toggle is one keystroke and never touches the
+ * committed team config. Local layers win, so `on` (off:false) overrides even a committed `off:true`.
+ * Returns the file written.
+ */
+export function setLocalOff(projectFile: string, off: boolean): string {
+  const file = localConfigPath(projectFile);
+  let existing: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    const parsed = JSON.parse(stripJsonComments(readFileSync(file, 'utf8'))) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
+  }
+  writeFileSync(file, `${JSON.stringify({ ...existing, off }, null, 2)}\n`);
+  return file;
+}
+
 function parseConfig(raw: Record<string, unknown>, label: string): SandboxConfig {
   const parsed = SandboxConfigSchema.safeParse(raw);
   if (!parsed.success) {
@@ -299,6 +325,9 @@ const CLAUDE_RANK = { none: 0, project: 1, home: 2 } as const;
 function boundaryLooseningWarnings(eff: SandboxConfig, base: SandboxConfig): string[] {
   const w: string[] = [];
   const added = (a: string[], b: string[]) => a.filter((x) => !b.includes(x));
+  // The strongest loosening there is: a personal layer turning containment OFF entirely. Flag it
+  // loudest, since every other boundary check below is moot once commands run on the host.
+  if (eff.off && !base.off) w.push('containment DISABLED (off:true) by a personal layer — every command runs on the host with NO sandbox');
   if (NET_RANK[eff.install.network] > NET_RANK[base.install.network]) w.push(`install.network widened to '${eff.install.network}' (team config: '${base.install.network}')`);
   if (NET_RANK[eff.run.network] > NET_RANK[base.run.network]) w.push(`run.network widened to '${eff.run.network}' (team config: '${base.run.network}')`);
   const egress = added(eff.egress.allow, base.egress.allow);

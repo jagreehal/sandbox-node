@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePackageManagerField, pmAuditFixArgv, pmAuditSignaturesArgv, pmDefaultRegistryHost, pmScriptArgv, pmUpdateArgv } from '../src/package-manager.js';
+import { parsePackageManagerField, pmArgv, pmAuditFixArgv, pmAuditSignaturesArgv, pmDefaultRegistryHost, pmExecArgv, pmScriptArgv, pmUpdateArgv } from '../src/package-manager.js';
 
 describe('pmDefaultRegistryHost', () => {
   it('returns yarnpkg.com only for yarn (classic defaults there); npm/pnpm/bun use the npm registry', () => {
@@ -31,6 +31,31 @@ describe('parsePackageManagerField', () => {
     expect(parsePackageManagerField('pnpm@9.15.0 && curl attacker')).toBeNull();
     expect(parsePackageManagerField('pnpm@9.15.0\nRUN echo hi')).toBeNull();
     expect(parsePackageManagerField('pnpm@9.15.0;echo hi')).toBeNull();
+  });
+});
+
+describe('pmArgv', () => {
+  it('adds deps as exact versions by default, routing pnpm/yarn through corepack', () => {
+    expect(pmArgv('npm', 'add', ['zod'])).toEqual(['npm', 'install', '--save-exact', 'zod']);
+    expect(pmArgv('pnpm', 'add', ['zod'])).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'zod']);
+    expect(pmArgv('yarn', 'add', ['zod'])).toEqual(['corepack', 'yarn', 'add', '--exact', 'zod']);
+    expect(pmArgv('bun', 'add', ['zod'])).toEqual(['bun', 'add', '--exact', 'zod']);
+  });
+
+  it('removes deps with each PM’s drop verb — npm `uninstall`, others `remove`, no exact defaulting', () => {
+    expect(pmArgv('npm', 'remove', ['lodash'])).toEqual(['npm', 'uninstall', 'lodash']);
+    expect(pmArgv('pnpm', 'remove', ['zod'])).toEqual(['corepack', 'pnpm', 'remove', 'zod']);
+    expect(pmArgv('yarn', 'remove', ['react', 'react-dom'])).toEqual(['corepack', 'yarn', 'remove', 'react', 'react-dom']);
+    expect(pmArgv('bun', 'remove', ['left-pad'])).toEqual(['bun', 'remove', 'left-pad']);
+  });
+});
+
+describe('pmExecArgv', () => {
+  it('uses bunx for bun projects and npx everywhere else (works regardless of the project PM)', () => {
+    expect(pmExecArgv('bun', ['vite'])).toEqual(['bunx', 'vite']);
+    expect(pmExecArgv('npm', ['vite', '--port', '3000'])).toEqual(['npx', 'vite', '--port', '3000']);
+    expect(pmExecArgv('pnpm', ['eslint', '.'])).toEqual(['npx', 'eslint', '.']);
+    expect(pmExecArgv('yarn', ['tsc'])).toEqual(['npx', 'tsc']);
   });
 });
 

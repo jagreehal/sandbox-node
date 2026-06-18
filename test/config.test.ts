@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadConfig, readConfig } from '../src/config.js';
+import { readFileSync } from 'node:fs';
+import { loadConfig, readConfig, setLocalOff } from '../src/config.js';
 
 function withConfig(json: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'sbx-cfg-'));
@@ -30,6 +31,11 @@ describe('readConfig', () => {
     expect(c.egress.allow).toEqual(['npmjs.org', 'npmjs.com']);
     expect(c.grants.claude).toBe('none');
     expect(c.grants.envFiles).toEqual([]);
+    expect(c.off).toBe(false); // containment on by default
+  });
+
+  it('honours an explicit off:true escape hatch (e.g. from a personal local override)', () => {
+    expect(readConfig(withConfig('{ "off": true }')).off).toBe(true);
   });
 
   it('strips //-comment keys', () => {
@@ -99,6 +105,34 @@ describe('loadConfig layering', () => {
     expect(config.image).toBe('mine:2'); // local wins
     expect(config.run.network).toBe('on'); // project preserved (deep merge, not replace)
     expect(config.run.ports).toEqual(['3000:3000']); // and its siblings
+  });
+
+  it('setLocalOff writes the toggle to the local override, and `on` overrides a committed off:true', () => {
+    const projectFile = withLayers('{ "off": true }'); // team config turned it off
+    setLocalOff(projectFile, false); // `sandbox on`
+    expect(loadConfig(path.dirname(projectFile), projectFile).config.off).toBe(false); // local wins
+    setLocalOff(projectFile, true); // `sandbox off`
+    expect(loadConfig(path.dirname(projectFile), projectFile).config.off).toBe(true);
+  });
+
+  it('setLocalOff preserves other keys already in the local override', () => {
+    const projectFile = withLayers('{}', '{ "image": "my:image" }');
+    setLocalOff(projectFile, true);
+    const written = JSON.parse(readFileSync(path.join(path.dirname(projectFile), 'sandbox.config.local.json'), 'utf8'));
+    expect(written).toEqual({ image: 'my:image', off: true });
+  });
+
+  it('warns LOUDLY when a personal layer turns containment off (off:true beyond a committed off:false)', () => {
+    const projectFile = withLayers('{ "off": false }', '{ "off": true }');
+    const { config, warnings } = loadConfig(path.dirname(projectFile), projectFile);
+    expect(config.off).toBe(true); // it still applies — loosen loudly, not blocked
+    expect(warnings.some((w) => /containment DISABLED.*off:true.*personal layer/i.test(w))).toBe(true);
+  });
+
+  it('does not warn when off:true is committed in the team config (a reviewed decision, not a personal widen)', () => {
+    const projectFile = withLayers('{ "off": true }');
+    const { warnings } = loadConfig(path.dirname(projectFile), projectFile);
+    expect(warnings.some((w) => /containment DISABLED/i.test(w))).toBe(false);
   });
 
   it('warns when a local layer loosens the network boundary beyond the committed config', () => {

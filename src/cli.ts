@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { confirm, isCancel, spinner } from '@clack/prompts';
 import { createBackend } from './backend.js';
 import { createBuildReporter, type BuildReporter } from './build-progress.js';
 import type { SandboxConfig } from './config.js';
-import { loadConfig, readConfig } from './config.js';
+import { loadConfig, readConfig, setLocalOff } from './config.js';
 import { resolveProjectContext } from './context.js';
 import { renderBadge } from './badge.js';
 import { COMPLETION_SHELLS, completionScript, isCompletionShell } from './completion.js';
@@ -20,11 +20,11 @@ import { runDoctor } from './doctor.js';
 import { execute } from './execute.js';
 import { classifyCommand } from './tamper.js';
 import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
-import { runInit } from './init.js';
+import { ensureLocalConfigIgnored, runInit } from './init.js';
 import { log } from './log.js';
-import { lockfileName, pmAuditFixArgv, pmAuditSignaturesArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
-import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
-import { probeProject, type ProjectFacts } from './project.js';
+import { lockfileName, pmArgv, pmAuditFixArgv, pmAuditSignaturesArgv, pmExecArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
+import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRemove, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
+import { probeProject, readManifestDependencies, readWorkspaceDependencies, type ProjectFacts } from './project.js';
 import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
 import { detectShell, installPath, SHELLS, statusPath, uninstallPath, type PathActionResult, type Shell } from './path-setup.js';
 import { type AdvisoryHit, type AdvisorySeverityCounts, highestSeverity } from './advisory.js';
@@ -98,7 +98,7 @@ Just add "sandbox" in front — same commands, fewer secrets exposed:
   sandbox npm audit fix        remediate vulnerabilities under install-class isolation
   sandbox npm audit signatures verify registry signatures/provenance for installed packages
   sandbox npm run dev          run a script (dev server, tests, build, …)
-  sandbox npx vite             run a one-off tool
+  sandbox npx vite             run a one-off tool (or the shorthand: sandbox x vite)
 Works with npm, pnpm, yarn, and bun — install/ci/add/update, npm audit fix, pnpm audit --fix,
 report-only audit commands, \`npm audit signatures\`, \`pnpm audit signatures\`, and any run/exec
 script. Your SSH keys, npm token, cloud creds, and editor/agent state stay out unless you grant
@@ -115,6 +115,9 @@ Sandbox commands:
                        Use this when the script name collides with a sandbox command
                        like build/scan/doctor/demo.
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
+  off / on             toggle containment for this project (writes off to sandbox.config.local.json,
+                       your git-ignored personal override). off → installs run on the host here;
+                       on → back in the sandbox. The per-project twin of SANDBOX_OFF=1.
   path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
                        npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically —
                        the human equivalent of the agent hook. Also wires tab-completion. Bypass
@@ -126,10 +129,17 @@ Sandbox commands:
   approve-builds [pkg]  approve dependency build scripts pnpm left ignored (writes allowBuilds +
                        onlyBuiltDependencies, then re-installs). No args = approve all pending;
                        --deny records the opposite. Install also prompts on a TTY automatically.
-  preflight [pm cmd]   supply-chain review WITHOUT installing: run the gates over what the
-                       command would pull, print every finding (+ a pin suggestion per blocked
-                       package), and exit non-zero exactly when that install would be blocked.
-                       e.g. sandbox --min-release-age 7 --fail-on-advisory preflight npm install
+  check [pkg... | file.json | pm cmd]   audit packages BEFORE you install them — npq-style.
+                       No container, no Docker: queries the registry + OSV advisory DB and prints
+                       every finding (malware, vulns, typosquats, fresh/deprecated versions, …).
+                         sandbox check express lodash@4      bare names (the common case)
+                         sandbox check                       this project's deps (root + every workspace)
+                         sandbox check ./apps/web/package.json   the deps in a specific manifest
+                         sandbox check npm install x         a full command form
+                       A package.json is read workspace-aware, so a monorepo root expands to all of
+                       its packages. Blocks on malware/known-bad; --min-release-age / --fail-on-advisory
+                       / --fail-on-risk tighten it for CI.
+  preflight [pm cmd]   alias of check that mirrors a specific install command's gates.
   scan                 RETROACTIVE malware sweep: re-query OSV for the versions in your committed
                        lockfile and exit non-zero if any installed package is NOW flagged as
                        malware. Catches deps that turned malicious AFTER you installed them — the
@@ -180,8 +190,13 @@ Expert (explicit) commands — same models the pass-through maps onto:
   install [pm-args]    install deps. Persistence paths (.git/.github/.husky/.claude/…)
                        and package.json are read-only; root stays writable. No host
                        creds. Egress default-deny (allowlist: registry only).
-  add <pkg...>         add dependency(ies) — the only command that writes package.json,
-                       and saves them as exact versions by default
+  add <pkg...>         add dependency(ies) — writes package.json, saved as exact versions
+                       by default
+  remove <pkg...>      drop dependency(ies) — writes package.json like add, but fetches
+                       nothing new (no supply-chain gate). Pass-through too: sandbox npm
+                       uninstall lodash · sandbox pnpm remove zod · sandbox bun rm left-pad
+  x <tool> [args]      run a package binary npx/bunx-style (local-first, fetches as fallback) —
+                       the shorthand for sandbox npx <tool> / sandbox bunx <tool>
   run -- <cmd...>      run a command in the container (network: none by default)
   shell                interactive shell in the container
   version              print the installed sandbox version (also -v / --version)
@@ -232,6 +247,11 @@ Globals (before the command):
   --json               print the resolved execution plan as JSON instead of running it
   --no-update-check    skip the once-a-day "new version available" check for this run
                        (also off via NO_UPDATE_NOTIFIER=1, CI=1, or updateCheck:false in config)
+
+Turn it off: SANDBOX_OFF=1 runs one command (or, exported, a whole shell) straight on the host with
+no container. For a trusted repo, set "off": true in sandbox.config.json (whole team) or
+sandbox.config.local.json (just you) so a globally-wired \`sandbox path install\` stops sandboxing
+here. Sandbox-only commands (check, doctor, init, verify, …) keep working either way.
 
 Logging: human lines on stderr by default; set SANDBOX_LOG=json for NDJSON,
 SANDBOX_LOG_LEVEL=debug|info|warn|error to filter.
@@ -351,6 +371,62 @@ function applyOneOffModes(config: SandboxConfig, globals: Globals): SandboxConfi
   return { ...cfg, install: { ...cfg.install, network: 'on' }, run };
 }
 
+/**
+ * Containment turned OFF — by `off: true` in the config (team or personal-local) or a non-empty
+ * `SANDBOX_OFF` env var. When off, operation commands run straight on the host. Mirrors the shell
+ * wrappers' `[ -n "$SANDBOX_OFF" ]` test so one knob means the same thing everywhere.
+ */
+function sandboxOff(config: SandboxConfig): boolean {
+  return config.off || (process.env.SANDBOX_OFF ?? '') !== '';
+}
+
+/**
+ * Run the resolved command on the host, no container — the body of "sandbox is off". Inherits stdio
+ * so an interactive install/dev server behaves exactly as if `sandbox` weren't there. `--dry-run` and
+ * `--json` describe the host command instead of running it, matching the contained path's contract.
+ */
+function runOnHost(argv: string[], cwd: string, globals: Globals): number {
+  const reason = config_off_reason();
+  if (globals.dryRun) {
+    console.log(`sandbox: OFF (${reason}) — would run on the host, no container:\n  ${argv.join(' ')}`);
+    return 0;
+  }
+  if (globals.json) {
+    console.log(JSON.stringify({ off: true, reason, host: true, argv }, null, 2));
+    return 0;
+  }
+  log.warn(`sandbox is OFF (${reason}) — running on the host without containment: ${argv.join(' ')}`);
+  const [program, ...rest] = argv;
+  const result = spawnSync(program!, rest, { cwd, stdio: 'inherit' });
+  if (result.error) fail(`could not run '${program}' on the host: ${result.error.message}`);
+  return result.status ?? 1;
+}
+
+/** Why containment is off, for the one-line notice — the env var wins the attribution when both are set. */
+function config_off_reason(): string {
+  return (process.env.SANDBOX_OFF ?? '') !== '' ? 'SANDBOX_OFF' : 'off:true in config';
+}
+
+/**
+ * The exact command to run on the host when containment is off. A pass-through leader
+ * (`sandbox npm ci`, `sandbox pnpm add zod`, `sandbox npx vite`) runs VERBATIM — truest to "as if
+ * sandbox weren't in front of it", preserving `ci`/flags and the host's own package manager. A
+ * sandbox shorthand (`dev`, `test`, `install`, `add`, `remove`, `x`, …) uses its resolved argv.
+ */
+function hostCommandFor(cmd: string, args: string[], route: Route): string[] {
+  if (routePassthrough([cmd, ...args])) return [cmd, ...args];
+  switch (route.model) {
+    case 'install': return pmArgv(route.pm, 'install', route.args);
+    case 'add': return pmArgv(route.pm, 'add', route.pkgs);
+    case 'remove': return pmArgv(route.pm, 'remove', route.pkgs);
+    case 'update': return pmUpdateArgv(route.pm, route.verb, route.args);
+    case 'auditFix': return pmAuditFixArgv(route.pm, route.fixToken, route.args);
+    case 'auditSignatures': return pmAuditSignaturesArgv(route.pm, route.args);
+    case 'audit':
+    case 'run': return route.argv;
+  }
+}
+
 /** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
 function requireLockfileForFrozen(facts: ProjectFacts, frozen: boolean): void {
   if (frozen && !facts.hasLockfile) {
@@ -372,6 +448,9 @@ function resolveRoute(cmd: string, args: string[], facts: ProjectFacts): Route |
     case 'add':
       if (args.length === 0) fail('usage: sandbox add <pkg>...  (deliberate package.json change)');
       return { model: 'add', pm: facts.pm, pkgs: args };
+    case 'remove':
+      if (args.length === 0) fail('usage: sandbox remove <pkg>...  (deliberate package.json change)');
+      return { model: 'remove', pm: facts.pm, pkgs: args };
     case 'script': {
       const [script, ...rest] = args;
       if (!script) fail('usage: sandbox script <name> [args]');
@@ -381,6 +460,11 @@ function resolveRoute(cmd: string, args: string[], facts: ProjectFacts): Route |
       const argv = args[0] === '--' ? args.slice(1) : args;
       if (argv.length === 0) fail('usage: sandbox run -- <cmd...>');
       return { model: 'run', argv };
+    }
+    case 'x': {
+      // The npx/bunx muscle-memory shortcut: `sandbox x vite` runs the local (or fetched) tool.
+      if (args.length === 0) fail('usage: sandbox x <tool> [args]  (run a package binary, npx-style)');
+      return { model: 'run', argv: pmExecArgv(facts.pm, args) };
     }
     case 'shell':
       return { model: 'run', argv: ['bash', '-l'] };
@@ -407,7 +491,44 @@ function resolveCommand(cmd: string, args: string[], facts: ProjectFacts): Route
     return { model: 'run', argv: pmScriptArgv(facts.pm, scriptName, args) };
   }
   if (facts.scripts[cmd]) return { model: 'run', argv: pmScriptArgv(facts.pm, cmd, args) };
-  fail(`unknown command '${cmd}'\n  try a command you know:  sandbox npm install · sandbox pnpm add zod · sandbox npm run dev · sandbox dev\n  or a sandbox command:     init · setup · allow · doctor · build · install · add · script · run · shell`);
+  fail(`unknown command '${cmd}'\n  try a command you know:  sandbox npm install · sandbox pnpm add zod · sandbox npm run dev · sandbox dev\n  or a sandbox command:     init · setup · allow · check · doctor · build · install · add · remove · script · run · x · shell`);
+}
+
+/**
+ * The dependencies declared in a `package.json` (or any manifest-shaped `.json`) handed to `check`.
+ * A file literally named `package.json` is read workspace-aware, so pointing at a monorepo root
+ * expands every workspace package too — the same union `check` with no args audits. `name@spec`
+ * tokens flow through the add surface, where local `workspace:`/`file:` specs are dropped.
+ */
+function depsFromManifestArg(file: string, cwd: string): string[] {
+  const abs = path.resolve(cwd, file);
+  if (!existsSync(abs)) fail(`check: no such file '${file}'`);
+  const deps = path.basename(abs) === 'package.json' ? readWorkspaceDependencies(path.dirname(abs)) : readManifestDependencies(abs);
+  return deps.map((d) => `${d.name}@${d.spec}`);
+}
+
+/**
+ * The route `sandbox check`/`preflight` should audit. npq-style ergonomics: a `.json` file argument
+ * audits the dependencies declared in that manifest (`check ./packages/api/package.json`, monorepo
+ * roots expand to every workspace); bare package names are the common case (`check express lodash@4`
+ * → an add surface); a leading package manager means the caller spelled the whole command (`check npm
+ * install x`); and no args audits the current project's manifest(s) — root plus every workspace.
+ *
+ * `invocationCwd` is the directory the user actually ran from (NOT the probed project root), so a
+ * relative `.json` path resolves where they'd expect from a workspace subdirectory.
+ */
+function checkRouteFor(args: string[], facts: ProjectFacts, invocationCwd: string): Route {
+  const manifests = args.filter((a) => a.endsWith('.json'));
+  if (manifests.length) {
+    const pkgs = manifests.flatMap((file) => depsFromManifestArg(file, invocationCwd));
+    if (!pkgs.length) fail(`check: no registry dependencies found in ${manifests.join(', ')}`);
+    return { model: 'add', pm: facts.pm, pkgs };
+  }
+  if (args.length === 0) return resolveCommand('install', [], facts);
+  if (args[0] === 'npm' || args[0] === 'pnpm' || args[0] === 'yarn' || args[0] === 'bun') {
+    return resolveCommand(args[0], args.slice(1), facts);
+  }
+  return { model: 'add', pm: facts.pm, pkgs: args };
 }
 
 /**
@@ -425,6 +546,8 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
     }
     case 'add':
       return planAdd(config, { ...facts, pm: route.pm }, route.pkgs, opts);
+    case 'remove':
+      return planRemove(config, { ...facts, pm: route.pm }, route.pkgs, opts);
     case 'update':
       return planUpdate(config, { ...facts, pm: route.pm }, pmUpdateArgv(route.pm, route.verb, route.args), opts);
     case 'auditFix':
@@ -490,9 +613,10 @@ function riskTargetsForRoute(route: Route, facts: ProjectFacts): RiskTarget[] {
     }
     case 'auditFix':
       return riskTargetsForUpdate({ ...facts, pm: route.pm }, parsePackageTargets(route.args).map((t) => t.name), false);
+    case 'remove':
     case 'audit':
     case 'auditSignatures':
-      return []; // read-only verification: installs nothing, so there's no supply-chain surface to gate
+      return []; // removal/read-only verification fetch nothing new, so there's no supply-chain surface to gate
     case 'run':
       return execPackageTargets(route.argv);
   }
@@ -777,9 +901,15 @@ interface ActivePolicy {
   policy: PreflightPolicy;
 }
 
-function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route): ActivePolicy {
+/**
+ * `forceCheck` is set by the explicit `check`/`preflight` commands: they ALWAYS query the OSV
+ * advisory DB (and show risk hints), so a bare `sandbox check express` actually checks rather than
+ * printing "no gates enabled". The install hot path leaves it false, so a normal install only pays
+ * the OSV round-trip when the user opted in with `--fail-on-advisory`.
+ */
+function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route, forceCheck = false): ActivePolicy {
   const riskLevel = globals.risk ?? config.install.riskHints;
-  const riskHints = riskLevel !== 'off';
+  const riskHints = riskLevel !== 'off'; // `--risk off` always wins, even under a forced check
   const thorough = riskLevel === 'thorough';
   const minReleaseAgeDays = globals.minReleaseAge ?? config.install.minReleaseAgeDays;
   const failOnAdvisory = globals.failOnAdvisory ?? config.install.failOnAdvisory;
@@ -799,7 +929,7 @@ function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route): A
       minReleaseAgeDays,
       releaseAgeExclude: [...config.install.minReleaseAgeExclude, ...globals.allowRecent],
       deep,
-      advisories: failOnAdvisory,
+      advisories: failOnAdvisory || forceCheck,
     },
   };
 }
@@ -809,7 +939,7 @@ function deprecatedHints(result: PreflightResult): RiskHint[] {
 }
 
 function nothingToCheck(ap: ActivePolicy): boolean {
-  return !ap.riskHints && !ap.failOnAdvisory && ap.minReleaseAgeDays === 0;
+  return !ap.riskHints && !ap.policy.advisories && ap.minReleaseAgeDays === 0;
 }
 
 function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefined {
@@ -921,8 +1051,8 @@ function renderPreflightJson(result: PreflightResult, suggestions: PinSuggestion
  * and the human equivalent of "show me the risk before I commit". `--json` emits the findings plus
  * a concrete pin suggestion per blocked package; otherwise the same human lines as the install path.
  */
-async function runPreflightCommand(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route): Promise<number> {
-  const ap = resolvePolicy(globals, config, route);
+async function runPreflightCommand(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route, opts: { force?: boolean } = {}): Promise<number> {
+  const ap = resolvePolicy(globals, config, route, opts.force);
   const targets = riskTargetsForRoute(route, facts);
   const knownBad = loadKnownBad(facts.cwd);
 
@@ -1481,6 +1611,24 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (cmd === 'off' || cmd === 'on') {
+    // One-keystroke toggle of the `off` escape hatch, written to the personal local override so it
+    // never touches the committed team config. `off` → installs run on the host here; `on` → back in
+    // the sandbox (and overrides a committed off:true, since local layers win).
+    const projectFile = context.configPath ?? path.join(context.rootDir, 'sandbox.config.json');
+    const file = path.relative(context.rootDir, setLocalOff(projectFile, cmd === 'off')) || path.basename(projectFile);
+    // Keep the personal override out of git — committing off:true would silently disable containment
+    // for the whole team. Idempotent; only relevant when the project never ran init/setup.
+    if (ensureLocalConfigIgnored(context.rootDir)) log.info(`added ${path.basename(file)} to .gitignore so it can't be committed`);
+    if (cmd === 'off') {
+      log.warn(`containment OFF for this project — wrote off:true to ${file}. \`sandbox npm install\` now runs on the host. Re-enable: \`sandbox on\``);
+      if (process.env.SANDBOX_OFF) log.info('note: SANDBOX_OFF is also set in this shell, so sandbox stays off here until you unset it too');
+    } else {
+      log.info(`containment ON — wrote off:false to ${file}. Installs run in the sandbox again.${process.env.SANDBOX_OFF ? ' (SANDBOX_OFF is still set in this shell — unset it to take effect)' : ''}`);
+    }
+    return 0;
+  }
+
   if (cmd === 'path') {
     const action = args.find((a) => !a.startsWith('-')) ?? 'install';
     const shellIdx = args.indexOf('--shell');
@@ -1626,15 +1774,30 @@ async function main(): Promise<number> {
     return runUpgradeCommand(globals, config, facts, args, materialize);
   }
 
+  if (cmd === 'check') {
+    // Audit packages WITHOUT installing — the npq-style review pass. No container, no Docker: it only
+    // queries the registry and the OSV advisory DB. Takes bare package names the friendly way
+    // (`sandbox check express lodash@4`), a full command (`check npm install x`), or no args (audit the
+    // current manifest). `force` makes OSV always run, so a bare `check` checks instead of reporting
+    // "no gates enabled".
+    return runPreflightCommand(globals, config, facts, checkRouteFor(args, facts, context.cwd), { force: true });
+  }
+
   if (cmd === 'preflight') {
-    // `sandbox preflight [cmd…]` checks WITHOUT installing. Default to the install surface; otherwise
-    // resolve the same way the real command would (pm pass-through AND package.json scripts).
+    // `sandbox preflight [cmd…]` mirrors a SPECIFIC install command's gates (unknown words error like
+    // any command, unlike `check`'s bare-name form). Default to the install surface; force OSV so the
+    // review always queries the advisory DB.
     const inner = args[0];
     const checkRoute = inner ? resolveCommand(inner, args.slice(1), facts) : resolveCommand('install', [], facts);
-    return runPreflightCommand(globals, config, facts, checkRoute);
+    return runPreflightCommand(globals, config, facts, checkRoute, { force: true });
   }
 
   const route = resolveCommand(cmd, args, facts);
+  // Containment off (config `off:true` or SANDBOX_OFF) → run the operation straight on the host, as if
+  // `sandbox` weren't in front of it. Checked before global-install guard/gates: off means off.
+  if (sandboxOff(config)) {
+    return runOnHost(hostCommandFor(cmd, args, route), facts.cwd, globals);
+  }
   // A global install is host tooling — running it in an ephemeral container installs nothing on the
   // host, so refuse with guidance rather than silently no-op (the path wrappers also pass these through).
   if (isGlobalInstall(cmd, route, args)) {
