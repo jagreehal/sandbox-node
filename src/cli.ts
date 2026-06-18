@@ -17,7 +17,8 @@ import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontaine
 import { renderPlanSummary } from './dryrun.js';
 import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
-import { execute } from './execute.js';
+import { execute, type ExecuteResult } from './execute.js';
+import { quiet } from './exec.js';
 import { classifyCommand } from './tamper.js';
 import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
 import { ensureLocalConfigIgnored, runInit } from './init.js';
@@ -36,7 +37,7 @@ import { scanSecrets, type SecretFinding } from './secrets.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
 import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
-import { runSetup } from './setup.js';
+import { backendInstallHint, backendStartHint, runSetup } from './setup.js';
 import { makeCanary } from './canary.js';
 import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
@@ -425,6 +426,23 @@ function hostCommandFor(cmd: string, args: string[], route: Route): string[] {
     case 'audit':
     case 'run': return route.argv;
   }
+}
+
+/**
+ * After a contained run throws (usually a cryptic "failed to build" plus a raw daemon error), work out
+ * whether the real cause is the container runtime being missing or its daemon being down — the most
+ * common first-run faceplant — and return the same friendly guidance `doctor`/`setup` give. Returns
+ * undefined when the backend looks healthy, so an unrelated error surfaces unchanged. Probes only on
+ * the failure path, so a healthy run pays nothing.
+ */
+async function explainBackendDown(bin: string, backend: 'docker' | 'podman'): Promise<string[] | undefined> {
+  if ((await quiet(bin, ['--version'])) !== 0) {
+    return [`${backend} isn't installed (or not on your PATH) — that's why this couldn't run`, `install it:  ${backendInstallHint(backend)}`, 'then re-run, or check your setup with:  sandbox doctor'];
+  }
+  if ((await quiet(bin, ['info'])) !== 0) {
+    return [`the ${backend} daemon isn't running — that's why this couldn't run`, `start it:  ${backendStartHint(backend)}`, 'then re-run, or check your setup with:  sandbox doctor'];
+  }
+  return undefined;
 }
 
 /** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
@@ -1716,7 +1734,19 @@ async function main(): Promise<number> {
     if (wantCanaries && !canary) log.info(`canaries requested but inactive here — they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
     let buildApprovalTries = 0;
     for (;;) {
-      const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+      let result: ExecuteResult;
+      try {
+        result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+      } catch (e) {
+        // Turn a cryptic build/run failure into the friendly "is Docker running?" guidance when that's
+        // the real cause; otherwise let the original error surface.
+        const hint = await explainBackendDown(backend.bin, globals.backend);
+        if (!hint) throw e;
+        const [problem, ...fixes] = hint;
+        log.error(problem!); // the cause carries the ✖
+        for (const line of fixes) log.info(line); // calm guidance, no alarm glyph
+        return 1;
+      }
       // pnpm refuses unknown dependency build scripts, records them under `allowBuilds:` in
       // pnpm-workspace.yaml as undecided, and exits non-zero. Resolve that here so the user never
       // hand-edits YAML: prompt on a TTY, auto-approve with --allow-all-builds, else print the
@@ -1751,7 +1781,7 @@ async function main(): Promise<number> {
         // once. Only for install-class commands that succeeded — a dev server or a failed run says its
         // own thing. `classifyCommand` returns 'other' for run/scripts, so those stay quiet.
         if (result.code === 0 && classifyCommand(plan.argv) !== 'other') {
-          log.info('done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir');
+          log.info('✓ done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir');
         }
         return result.code;
       }

@@ -16,12 +16,12 @@ export interface SetupOptions {
   image?: string;
 }
 
-function backendInstallHint(backend: 'docker' | 'podman'): string {
+export function backendInstallHint(backend: 'docker' | 'podman'): string {
   if (process.platform === 'darwin') return backend === 'docker' ? 'brew install --cask docker' : 'brew install podman';
   return backend === 'docker' ? 'install Docker and ensure `docker` is on PATH' : 'install Podman and ensure `podman` is on PATH';
 }
 
-function backendStartHint(backend: 'docker' | 'podman'): string {
+export function backendStartHint(backend: 'docker' | 'podman'): string {
   if (process.platform === 'darwin') return backend === 'docker' ? 'open -a Docker' : 'podman machine start';
   return backend === 'docker' ? 'sudo systemctl start docker' : 'start the Podman service or machine for this host';
 }
