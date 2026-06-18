@@ -128,3 +128,9 @@ way (`sandbox check express lodash@4`); `preflight` is the same review keyed to 
   (abort on any finding) unless the user pre-stated their tolerance — then encode it as flags.
 
 See [REFERENCE.md](REFERENCE.md) for the full flag list and finding formats.
+
+## Related skills
+
+- **sandbox-agent-isolation** — contain the *agent* that runs installs (host PreToolUse hook via `sandbox init --agent`, or run the whole session inside a `sandbox devcontainer`).
+- **sandbox-ci** — the read-only, no-Docker CI/cron gates: `verify`, `delta` (gate only a PR's dependency changes), `scan` (retroactive malware sweep), `secrets`.
+
