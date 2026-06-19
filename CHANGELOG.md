@@ -1,5 +1,11 @@
 # @jagreehal/sandbox-node
 
+## 1.7.1
+
+### Patch Changes
+
+- c242a1a: Better dx
+
 ## 1.7.0
 
 ### Minor Changes
