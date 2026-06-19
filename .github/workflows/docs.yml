@@ -37,7 +37,7 @@ jobs:
       # from the repo root, so a plain install resolves only the docs deps.
       - run: pnpm install
       - run: pnpm build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist
 
