@@ -4,7 +4,7 @@ import { stripJsonComments } from './config.js';
 
 /**
  * The host-side enforcement layer. `.sandbox/AGENT.md` *asks* the agent to use
- * `sandbox npm install`; a `PreToolUse` hook *enforces* it. The README's own honest
+ * `sandbox install`; a `PreToolUse` hook *enforces* it. The README's own honest
  * critique was that the AGENT.md instruction is advisory — it relies on the model
  * complying. This hook makes the boundary real: the host Claude literally cannot run a
  * bare `npm install`/`pnpm add`/`npx …` without going through containment, because the
@@ -58,15 +58,78 @@ function programTokens(segment: string): string[] {
 }
 
 function reason(command: string): string {
+  const rerun = suggestSandboxCommand(command);
   return [
     'Blocked by sandbox: run package-manager commands through `sandbox` so install/run',
     'happens inside containment (host credentials stay out, egress is default-deny).',
     '',
-    `Re-run it as:  sandbox ${command.trim()}`,
+    `Re-run it as:  ${rerun}`,
     '',
-    'Examples: `sandbox npm install`, `sandbox dev`, `sandbox test`, `sandbox npx vite`.',
+    'Examples: `sandbox install`, `sandbox add zod`, `sandbox dev`, `sandbox x vite`.',
     'If you genuinely need to bypass containment once, ask the user to run the command themselves.',
   ].join('\n');
+}
+
+function quoteArgs(tokens: string[]): string {
+  return tokens
+    .map((token) => (/^[A-Za-z0-9_./:@+-]+$/.test(token) ? token : JSON.stringify(token)))
+    .join(' ');
+}
+
+function explicitPassthrough(tokens: string[]): string {
+  return `sandbox ${quoteArgs(tokens)}`;
+}
+
+function hasFlags(tokens: string[]): boolean {
+  return tokens.some((token) => token.startsWith('-'));
+}
+
+function suggestSandboxCommand(command: string): string {
+  const tokens = programTokens(command.trim());
+  const program = tokens[0];
+  const sub = tokens[1];
+  if (!program) return 'sandbox install';
+
+  if (RUNNERS.has(program)) {
+    const args = tokens.slice(1);
+    if (args.length === 0 || hasFlags(args)) return explicitPassthrough(tokens);
+    return `sandbox x ${quoteArgs(args)}`;
+  }
+
+  if (!PMS.has(program)) return explicitPassthrough(tokens);
+  if (program === 'yarn' && !sub) return 'sandbox install';
+  if (!sub) return explicitPassthrough(tokens);
+
+  const after = tokens.slice(2);
+  if (sub === 'install' || sub === 'i' || sub === 'add') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    const hasNamedPackages = after.some((token) => token.length > 0 && !token.startsWith('-'));
+    if (hasNamedPackages) return `sandbox add ${quoteArgs(after)}`;
+    return 'sandbox install';
+  }
+  if (sub === 'ci') return explicitPassthrough(tokens);
+  if (sub === 'update' || sub === 'up' || sub === 'upgrade') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    return after.length > 0 ? `sandbox update ${quoteArgs(after)}` : 'sandbox update';
+  }
+  if (sub === 'remove' || sub === 'rm' || sub === 'uninstall' || sub === 'un') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    return after.length > 0 ? `sandbox remove ${quoteArgs(after)}` : 'sandbox remove';
+  }
+  if (sub === 'test' || sub === 't') return hasFlags(after) ? explicitPassthrough(tokens) : (after.length > 0 ? `sandbox test ${quoteArgs(after)}` : 'sandbox test');
+  if (sub === 'run' && after[0] === 'dev') {
+    if (hasFlags(after.slice(1))) return explicitPassthrough(tokens);
+    return after.length > 1 ? `sandbox dev ${quoteArgs(after.slice(1))}` : 'sandbox dev';
+  }
+  if (sub === 'run' && after[0] === 'test') {
+    if (hasFlags(after.slice(1))) return explicitPassthrough(tokens);
+    return after.length > 1 ? `sandbox test ${quoteArgs(after.slice(1))}` : 'sandbox test';
+  }
+  if (sub === 'exec' || sub === 'dlx' || sub === 'x') {
+    if (after.length === 0 || hasFlags(after)) return explicitPassthrough(tokens);
+    return `sandbox x ${quoteArgs(after)}`;
+  }
+  return explicitPassthrough(tokens);
 }
 
 export interface HookDecision {
@@ -142,6 +205,66 @@ function classify(command) {
   return null;
 }
 
+function quoteArgs(tokens) {
+  return tokens.map((token) => (/^[A-Za-z0-9_./:@+-]+$/.test(token) ? token : JSON.stringify(token))).join(' ');
+}
+
+function explicitPassthrough(tokens) {
+  return 'sandbox ' + quoteArgs(tokens);
+}
+
+function hasFlags(tokens) {
+  return tokens.some((token) => token.startsWith('-'));
+}
+
+function suggest(command) {
+  const tokens = programTokens(command.trim());
+  const program = tokens[0];
+  const sub = tokens[1];
+  if (!program) return 'sandbox install';
+
+  if (RUNNERS.has(program)) {
+    const args = tokens.slice(1);
+    if (args.length === 0 || hasFlags(args)) return explicitPassthrough(tokens);
+    return 'sandbox x ' + quoteArgs(args);
+  }
+
+  if (!PMS.has(program)) return explicitPassthrough(tokens);
+  if (program === 'yarn' && !sub) return 'sandbox install';
+  if (!sub) return explicitPassthrough(tokens);
+
+  const after = tokens.slice(2);
+  if (sub === 'install' || sub === 'i' || sub === 'add') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    const hasNamedPackages = after.some((token) => token.length > 0 && !token.startsWith('-'));
+    if (hasNamedPackages) return 'sandbox add ' + quoteArgs(after);
+    return 'sandbox install';
+  }
+  if (sub === 'ci') return explicitPassthrough(tokens);
+  if (sub === 'update' || sub === 'up' || sub === 'upgrade') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    return after.length > 0 ? 'sandbox update ' + quoteArgs(after) : 'sandbox update';
+  }
+  if (sub === 'remove' || sub === 'rm' || sub === 'uninstall' || sub === 'un') {
+    if (hasFlags(after)) return explicitPassthrough(tokens);
+    return after.length > 0 ? 'sandbox remove ' + quoteArgs(after) : 'sandbox remove';
+  }
+  if (sub === 'test' || sub === 't') return hasFlags(after) ? explicitPassthrough(tokens) : (after.length > 0 ? 'sandbox test ' + quoteArgs(after) : 'sandbox test');
+  if (sub === 'run' && after[0] === 'dev') {
+    if (hasFlags(after.slice(1))) return explicitPassthrough(tokens);
+    return after.length > 1 ? 'sandbox dev ' + quoteArgs(after.slice(1)) : 'sandbox dev';
+  }
+  if (sub === 'run' && after[0] === 'test') {
+    if (hasFlags(after.slice(1))) return explicitPassthrough(tokens);
+    return after.length > 1 ? 'sandbox test ' + quoteArgs(after.slice(1)) : 'sandbox test';
+  }
+  if (sub === 'exec' || sub === 'dlx' || sub === 'x') {
+    if (after.length === 0 || hasFlags(after)) return explicitPassthrough(tokens);
+    return 'sandbox x ' + quoteArgs(after);
+  }
+  return explicitPassthrough(tokens);
+}
+
 let raw = '';
 process.stdin.on('data', (c) => { raw += c; });
 process.stdin.on('end', () => {
@@ -152,8 +275,8 @@ process.stdin.on('end', () => {
   process.stderr.write(
     'Blocked by sandbox: run package-manager commands through \`sandbox\` so install/run\\n' +
     'happens inside containment (host credentials stay out, egress is default-deny).\\n\\n' +
-    'Re-run it as:  sandbox ' + hit + '\\n\\n' +
-    'Examples: \`sandbox npm install\`, \`sandbox dev\`, \`sandbox test\`, \`sandbox npx vite\`.\\n' +
+    'Re-run it as:  ' + suggest(hit) + '\\n\\n' +
+    'Examples: \`sandbox install\`, \`sandbox add zod\`, \`sandbox dev\`, \`sandbox x vite\`.\\n' +
     'If you genuinely need to bypass containment once, ask the user to run the command themselves.\\n'
   );
   process.exit(2);

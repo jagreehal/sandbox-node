@@ -13,7 +13,19 @@
   "type": "module",
   "bin": {
     "sandbox": "./dist/cli.mjs",
-    "sandbox-node": "./dist/cli.mjs"
+    "sandbox-node": "./dist/cli.mjs",
+    "sandbox-npm": "./bin/npm.mjs",
+    "sandbox-pnpm": "./bin/pnpm.mjs",
+    "sandbox-yarn": "./bin/yarn.mjs",
+    "sandbox-bun": "./bin/bun.mjs",
+    "sandbox-npx": "./bin/npx.mjs",
+    "sandbox-bunx": "./bin/bunx.mjs",
+    "snpm": "./bin/npm.mjs",
+    "spnpm": "./bin/pnpm.mjs",
+    "syarn": "./bin/yarn.mjs",
+    "sbun": "./bin/bun.mjs",
+    "snpx": "./bin/npx.mjs",
+    "sbunx": "./bin/bunx.mjs"
   },
   "types": "./dist/index.d.mts",
   "exports": {
@@ -27,6 +39,7 @@
     }
   },
   "files": [
+    "bin",
     "dist",
     "data",
     "Dockerfile",

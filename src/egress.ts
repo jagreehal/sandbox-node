@@ -72,6 +72,8 @@ export async function withEgress<T>(
     HTTPS_PROXY: url,
     http_proxy: url,
     https_proxy: url,
+    YARN_HTTP_PROXY: url,
+    YARN_HTTPS_PROXY: url,
     npm_config_proxy: url,
     npm_config_https_proxy: url,
   };

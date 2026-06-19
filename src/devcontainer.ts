@@ -4,6 +4,7 @@ import type { SandboxConfig } from './config.js';
 import { capture } from './exec.js';
 import { COMMON_DEV_PORTS } from './network.js';
 import { hostPortOf } from './ports.js';
+import { pmArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
 
 /** Base image for the generated devcontainer (repo:tag; the digest is resolved at init time). */
 export const BASE_IMAGE = 'mcr.microsoft.com/devcontainers/javascript-node:24-bookworm';
@@ -73,7 +74,7 @@ function forwardPorts(config: SandboxConfig): number[] {
 }
 
 /** The generated `devcontainer.json` as a plain object (pure; the writer serializes it). */
-export function devcontainerJson(config: SandboxConfig): Record<string, unknown> {
+export function devcontainerJson(config: SandboxConfig, pm: PackageManager): Record<string, unknown> {
   const firewall = firewallEnabled(config);
   const json: Record<string, unknown> = {
     $schema: 'https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json',
@@ -86,19 +87,36 @@ export function devcontainerJson(config: SandboxConfig): Record<string, unknown>
     features: {
       'ghcr.io/anthropics/devcontainer-features/claude-code:1.0': {},
     },
-    // Persist auth/settings/history across rebuilds, isolated per devcontainer.
-    mounts: ['source=sandbox-claude-config-${devcontainerId},target=/home/node/.claude,type=volume'],
+    mounts: [
+      // Persist Claude auth/settings/history across rebuilds, isolated per devcontainer.
+      'source=sandbox-claude-config-${devcontainerId},target=/home/node/.claude,type=volume',
+      // node_modules as a NAMED VOLUME, not part of the bind-mounted source. This is the load-bearing
+      // detail on macOS/Windows: the container's Linux node_modules never lands in the host filesystem
+      // (so the host IDE/toolchain can't trip over Linux-native binaries), and the hot path is a native
+      // Linux volume instead of a gRPC-FUSE bind, so install + file watching aren't crippled by Docker
+      // Desktop's bind-mount latency. Per-project name so volumes don't collide across repos.
+      'source=${localWorkspaceFolderBasename}-sandbox-node_modules,target=${containerWorkspaceFolder}/node_modules,type=volume',
+    ],
     containerEnv: {
       // Don't phone home with telemetry/error reports from inside the sandbox.
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
   };
 
+  // Populate the node_modules volume on create. A named volume mounts as root, but remoteUser is
+  // `node`, so chown it first or the install fails with EACCES.
+  const FIREWALL = 'sudo /usr/local/bin/init-firewall.sh';
+  const install = `sudo chown node:node node_modules && ${pmArgv(pm, 'install', []).join(' ')}`;
+  // When the egress firewall is on, apply it BEFORE the create-time install so that install is itself
+  // contained (the registry is on the allowlist, so it still works), then re-apply on every start
+  // (iptables rules don't survive a container restart). Without the firewall, just install.
+  json.postCreateCommand = firewall ? `${FIREWALL} && ${install}` : install;
+
   if (firewall) {
-    // The firewall needs to rewrite iptables; grant exactly those capabilities and run the
-    // init script once the container is up (it drops nothing the dev tools need).
+    // The firewall needs to rewrite iptables; grant exactly those capabilities and re-run the init
+    // script on each start (it drops nothing the dev tools need).
     json.runArgs = ['--cap-add=NET_ADMIN', '--cap-add=NET_RAW'];
-    json.postStartCommand = 'sudo /usr/local/bin/init-firewall.sh';
+    json.postStartCommand = FIREWALL;
   }
 
   const ports = forwardPorts(config);
@@ -232,7 +250,9 @@ export function writeDevcontainer(cwd: string, config: SandboxConfig, opts: { fo
   const firewall = firewallEnabled(config);
   const files: string[] = [];
 
-  writeFileSync(jsonPath, `${JSON.stringify(devcontainerJson(config), null, 2)}\n`);
+  // The create-time install uses the project's own package manager (Corepack-shimmed for pnpm/yarn).
+  const pm = resolvePackageManager(cwd);
+  writeFileSync(jsonPath, `${JSON.stringify(devcontainerJson(config, pm), null, 2)}\n`);
   files.push(jsonPath);
 
   const dockerfilePath = path.join(dir, 'Dockerfile');

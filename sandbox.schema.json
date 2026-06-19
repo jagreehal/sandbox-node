@@ -83,7 +83,10 @@
         "malwareFeeds": [],
         "failOnDeprecated": true,
         "cache": true,
-        "canaries": false
+        "canaries": false,
+        "failOnSourceWrites": false,
+        "safeInstall": true,
+        "pinExact": false
       },
       "type": "object",
       "properties": {
@@ -148,6 +151,18 @@
         "canaries": {
           "default": false,
           "type": "boolean"
+        },
+        "failOnSourceWrites": {
+          "default": false,
+          "type": "boolean"
+        },
+        "safeInstall": {
+          "default": true,
+          "type": "boolean"
+        },
+        "pinExact": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
@@ -161,7 +176,10 @@
         "malwareFeeds",
         "failOnDeprecated",
         "cache",
-        "canaries"
+        "canaries",
+        "failOnSourceWrites",
+        "safeInstall",
+        "pinExact"
       ],
       "additionalProperties": false
     },

@@ -70,7 +70,7 @@ export function doctorExitCode(checks: Check[]): number {
 export function doctorSummary(checks: Check[]): string {
   const failures = checks.filter((c) => c.level === 'fail').length;
   if (failures > 0) return `[fail] ${failures} ${failures === 1 ? 'check needs' : 'checks need'} attention, fix the above, then rerun: sandbox doctor`;
-  return "[ok] all clear, you're ready: `sandbox npm install`, then `sandbox dev`";
+  return "[ok] all clear, you're ready: `sandbox install`, then `sandbox dev`";
 }
 
 export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<number> {
@@ -101,7 +101,7 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     level: hasLockfile ? 'ok' : 'info',
     label: 'package manager',
     detail: hasLockfile ? `${pm} (${lockfile})` : `${pm} (no ${lockfile} yet)`,
-    fixes: hasLockfile ? undefined : [`run \`sandbox ${pm} install\` to create ${lockfile}`],
+    fixes: hasLockfile ? undefined : [`run \`sandbox install\` to create ${lockfile}`],
   });
   if (opts.invocationCwd && opts.invocationCwd !== cwd) {
     checks.push({ level: 'info', label: 'workspace root', detail: cwd });
@@ -232,8 +232,8 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
         ? {
             level: 'info',
             label: 'node_modules',
-            detail: `${foreignNative.length} package(s) are built for another platform (e.g. ${foreignNative[0]}), run project tools with \`sandbox test\`/\`sandbox dev\`, or reinstall on this host for native dev`,
-            fixes: [`run tests via \`sandbox test\`, or reinstall on the host with \`${pm} install\` for host-native tooling`],
+            detail: `${foreignNative.length} package(s) are built for the Linux container, not this ${process.platform} host (e.g. ${foreignNative[0]}). One mode per project: run project tools with \`sandbox test\`/\`sandbox dev\`, or rebuild a host-native tree with a plain install.`,
+            fixes: [`run tests via \`sandbox test\`/\`sandbox dev\`, run a plain host install for a local (host-native) tree, or \`sandbox devcontainer init\` to run the editor in the container`],
           }
         : { level: 'ok', label: 'node_modules', detail: `native packages match this ${process.platform} host` },
     );

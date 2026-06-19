@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Install the sandbox CLI, run your first contained install, and wire it so a bare npm install routes through the box automatically.
+description: Install the sandbox CLI, run your first gated install with sandbox add, and use check to vet without installing anything.
 ---
 
 You need a container runtime: Docker Desktop, OrbStack, Podman, or any Docker-compatible engine. That's the only dependency; the CLI builds its own images on first run. macOS and Linux are supported directly; on Windows, run inside WSL2.
@@ -20,36 +20,54 @@ npx @jagreehal/sandbox-node@latest check lodash
 npm install -D @jagreehal/sandbox-node
 ```
 
-That puts `sandbox` on your path. The first contained command builds the sandbox image (a one-time step, around 30 seconds); every run after that reuses it.
+That puts `sandbox` on your path. The first contained command builds the sandbox image (a one-time step, around 30 seconds); every contained run after that reuses it.
 
-## Run your first contained install
+## Run your first gated install
 
-Put `sandbox` in front of the command you already run:
-
-```bash
-sandbox npm install        # lifecycle scripts run in the box, not on your host
-sandbox pnpm add zod       # add a dependency (saved exact by default)
-sandbox npm uninstall left-pad
-```
-
-A clean install ends with one line confirming you were never exposed:
-
-```
-sandbox: ✓ done, ran in a throwaway sandbox, now deleted; it never had your credentials or home dir
-```
-
-## Stop typing the prefix
-
-Tired of remembering `sandbox`? Wire shell wrappers so a bare `npm install` / `pnpm add` / `npx` routes through the box automatically:
+Use `sandbox add` (or `sandbox install`). It auto-detects your package manager, vets the package, then installs it natively on the host so your IDE gets host-native binaries:
 
 ```bash
-sandbox path install     # undo any time with: sandbox path uninstall
+sandbox add zod            # vet, then install natively on the host
+sandbox install            # full install, gated and native by default
+sandbox update             # update deps, gated and native by default
+sandbox pnpm add zod       # explicit container boundary for this install
 ```
 
-This installs shell functions (zsh, bash, fish, pwsh) that send the install-class and fetch-and-run commands through sandbox, and leave read-only commands untouched. Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`.
+Before every write, sandbox prints one orient line: package manager, project mode, execution mode.
+
+```
+sandbox: pnpm · host-native deps · native
+sandbox: gates passed, installing natively on the host so your IDE gets native binaries
+```
+
+A clean install stays quiet otherwise. Findings are loud and specific.
+
+:::tip[Expert shortcuts]
+Prefer your package manager's own keystrokes? The per-PM binaries are shorter front-ends for the same gated native path: `sandbox-pnpm add zod`, or the terse `spnpm add zod` (and `snpm`, `snpx`, `sbun`). Use explicit `sandbox pnpm add zod` when you want the throwaway container boundary.
+:::
+
+## One mode per project
+
+`node_modules` is either LOCAL (host-native, from your own `pnpm install` or the native-default sandbox path, so your IDE just works) or CONTAINER (the Linux tree an explicit contained install builds). Never both. sandbox tells them apart by the native binaries in the tree, so before a contained install would replace a host-native tree with a Linux one your IDE can't load, it warns and, on a terminal, asks you to confirm the switch.
+
+For containment and a happy IDE together, generate a devcontainer (`node_modules` lives in a Docker volume, editor and deps run in the box):
+
+```bash
+sandbox devcontainer init
+```
+
+## Vet without a container
+
+`sandbox check` is the one thing that skips the container. It reviews packages and installs nothing:
+
+```bash
+sandbox check some-sketchy-pkg
+```
+
+Your real `pnpm` is never shadowed: bare `pnpm`/`npm` always run your own tools. You opt into sandbox by typing the prefix.
 
 :::tip[One-button setup]
-`sandbox setup` writes a config if you don't have one, checks your container runtime, builds the images, and offers to wire the shell wrappers, all in one command. Add `--vibe` for a dev-focused preset or `--agent` to also harden a coding agent.
+`sandbox setup` writes a config if you don't have one, checks your container runtime, builds the images, and prints the next commands, all in one. Add `--vibe` for a dev-focused preset or `--agent` to also harden a coding agent.
 :::
 
 ## Check your setup any time

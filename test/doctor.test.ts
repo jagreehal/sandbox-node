@@ -52,7 +52,7 @@ describe('doctorSummary', () => {
   it('gives an all-clear verdict with the next commands when nothing failed (info is fine)', () => {
     const summary = doctorSummary([ok('backend'), { level: 'info', label: 'image', detail: 'will build on first use' }]);
     expect(summary).toContain('[ok]');
-    expect(summary).toContain('sandbox npm install');
+    expect(summary).toContain('sandbox install');
   });
 
   it('counts failures and points back at the report', () => {

@@ -15,7 +15,7 @@ import { resolveBuildSpec } from './image.js';
 import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
-import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
+import { containerWritePm, effectivePm, isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
 import { execute, type ExecuteResult } from './execute.js';
 import { quiet } from './exec.js';
@@ -26,14 +26,18 @@ import { log } from './log.js';
 import { lockfileName, pmArgv, pmAuditFixArgv, pmAuditSignaturesArgv, pmExecArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
 import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRemove, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
 import { probeProject, readManifestDependencies, readWorkspaceDependencies, type ProjectFacts } from './project.js';
+import { crossModeWarning, orientLine } from './mode.js';
+import { foldBinLeader, leaderForBin } from './native.js';
+import { detectProjectMode, hostPlatform } from './native-deps.js';
 import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
-import { detectShell, installPath, SHELLS, statusPath, uninstallPath, type PathActionResult, type Shell } from './path-setup.js';
 import { type AdvisoryHit, type AdvisorySeverityCounts, highestSeverity } from './advisory.js';
+import { blockExit, deprecatedHints, nothingToCheck, type ActivePolicy } from './gates.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
 import { runScan } from './scan.js';
 import { runDelta } from './delta.js';
 import { feedCacheDir, loadKnownBad, PROJECT_ADVISORY_NAME, updateFeeds, type KnownBadHit } from './known-bad.js';
 import { scanSecrets, type SecretFinding } from './secrets.js';
+import { formatSafeReceipt, freshSubstitutions, incidentallyPinned, rewriteAddArgs, type Substitution } from './safe-install.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
 import { execPackageTargets, parseLockfilePackages, parsePackageTargets, planRiskHintLog, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
@@ -43,6 +47,7 @@ import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
 import { buildHostSuffixes } from './hosts.js';
 import { disabledByEnv, refreshUpdateCache, scheduleUpdateCheck, selfVersion, updateBanner } from './update-check.js';
+import { renderSandboxRetry } from './retry.js';
 import type { ContainerBackend } from './backend.js';
 
 interface Globals {
@@ -54,6 +59,7 @@ interface Globals {
   frozen: boolean;
   dev: boolean;
   failOnEgress: boolean;
+  failOnSourceWrites: boolean;
   failOnRisk?: boolean;
   fullNetwork: boolean;
   risk?: 'off' | 'basic' | 'thorough';
@@ -84,28 +90,31 @@ interface Globals {
 
 const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
 
-const HELP = `sandbox: put it in front of the npm/pnpm/yarn/bun command you already run
+const HELP = `sandbox: supply-chain gates first, container when you want the boundary
 
 Usage: sandbox [globals] <command> [args]
 
-Just add "sandbox" in front. Same commands, fewer secrets exposed:
+Quick start:
+  sandbox check zod           review a package before you add it
+  sandbox install             vet, then install natively with the detected package manager
+  sandbox add zod             vet, then add a dependency natively with the detected package manager
+  sandbox update              vet, then update dependencies natively with the detected package manager
+  sandbox devcontainer init   keep your editor + agent inside the container for the full session
+
+Common project commands:
   sandbox dev                 auto-detect PM, run dev/start/serve with full network + dev ports
   sandbox test                auto-detect PM, run a package.json script natively
   sandbox script build        run a specific package.json script, even if it collides with a sandbox command
-  sandbox setup --vibe         one-button setup for vibe/dev work
-  sandbox npm install          install deps in the sandbox (lifecycle scripts contained)
-  sandbox pnpm add zod         add a dependency (saved exact by default)
-  sandbox npm update           update deps, gated + sandboxed like install (pnpm up / yarn upgrade too)
-  sandbox npm audit fix        remediate vulnerabilities under install-class isolation
-  sandbox npm audit signatures verify registry signatures/provenance for installed packages
-  sandbox npm run dev          run a script (dev server, tests, build, …)
-  sandbox npx vite             run a one-off tool (or the shorthand: sandbox x vite)
-Works with npm, pnpm, yarn, and bun: install/ci/add/update, npm audit fix, pnpm audit --fix,
-report-only audit commands, \`npm audit signatures\`, \`pnpm audit signatures\`, and any run/exec
-script. Your SSH keys, npm token, cloud creds, and editor/agent state stay out unless you grant
-them.
+  sandbox setup --vibe        one-button setup for vibe/dev work
 
-Sandbox commands:
+Expert: per-PM binaries (same native path, shorter keystrokes)
+  New here? Use \`sandbox add\` / \`sandbox install\` above. These are for muscle memory only:
+  sandbox-pnpm add zod         vet with the gate engine, then run \`pnpm add\` natively on the host.
+  (short alias: spnpm)         Same for npm/yarn/bun. Use explicit \`sandbox <pm>\` when you WANT the
+                               throwaway container boundary. Your real \`pnpm\` is never touched.
+  sandbox-npm/snpm · sandbox-yarn/syarn · sandbox-bun/sbun · sandbox-npx/snpx · sandbox-bunx/sbunx
+
+Advanced commands:
   init [--preset N]    create sandbox.config.json from a preset (interactive picker,
                        or non-interactive with --preset strict|balanced|vibe|agent|trusted [--force])
   setup [--preset N]   one-button onboarding: write config if needed, check backend,
@@ -116,16 +125,11 @@ Sandbox commands:
                        Use this when the script name collides with a sandbox command
                        like build/scan/doctor/demo.
   allow <host...>      add host(s) to egress.allow in sandbox.config.json
-  off / on             toggle containment for this project (writes off to sandbox.config.local.json,
-                       your git-ignored personal override). off → installs run on the host here;
-                       on → back in the sandbox. The per-project twin of SANDBOX_OFF=1.
-  path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
-                       npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically,
-                       the human equivalent of the agent hook. Also wires tab-completion. Bypass
-                       once with 'command npm ...' or a whole shell with SANDBOX_OFF=1.
+  off / on             toggle the sandbox wrapper for this project (writes off to sandbox.config.local.json,
+                       your git-ignored personal override). off → sandbox commands pass straight through
+                       on the host here; on → gates + normal sandbox behavior again. The per-project twin of SANDBOX_OFF=1.
   completion <shell>   print a standalone tab-completion script for zsh|bash|fish (commands,
-                       globals, --preset/--backend/--risk). \`sandbox path install\` already wires
-                       this in; use this to install it on its own, e.g. for zsh:
+                       globals, --preset/--backend/--risk). Install it for zsh, e.g.:
                        \`sandbox completion zsh > "\${fpath[1]}/_sandbox"\`.
   approve-builds [pkg]  approve dependency build scripts pnpm left ignored (writes allowBuilds +
                        onlyBuiltDependencies, then re-installs). No args = approve all pending;
@@ -185,9 +189,10 @@ Sandbox commands:
                        --workflow sandbox.yml = the CI-backed verified badge (--repo to override)
   devcontainer init    generate a .devcontainer/ from sandbox.config.json, the persistent
                        (per-session) form of the same policy: run the agent + editor INSIDE
-                       the jail, with the same egress allowlist. Add --force to overwrite.
+                       the jail, with the same egress allowlist. node_modules lives in a Docker
+                       volume, so the container boundary AND a happy IDE come together. --force to overwrite.
 
-Expert (explicit) commands, the same models the pass-through maps onto:
+Pass-through and expert commands:
   install [pm-args]    install deps. Persistence paths (.git/.github/.husky/.claude/…)
                        and package.json are read-only; root stays writable. No host
                        creds. Egress default-deny (allowlist: registry only).
@@ -202,6 +207,10 @@ Expert (explicit) commands, the same models the pass-through maps onto:
   shell                interactive shell in the container
   version              print the installed sandbox version (also -v / --version)
 
+Expert: explicit package-manager passthrough still works: \`sandbox npm install\`,
+\`sandbox pnpm add zod\`, \`sandbox yarn upgrade\`, \`sandbox bunx vite\`. Your SSH keys,
+npm token, cloud creds, and editor/agent state stay out unless you grant them.
+
 Globals (before the command):
   --config <path>      use a specific sandbox.config.json
   --image <tag>        override the sandbox image tag
@@ -215,6 +224,8 @@ Globals (before the command):
                        manager except pnpm the ENTIRE source tree is read-only. Needs a
                        committed lockfile.
   --fail-on-egress     exit non-zero if the proxy blocked any egress (CI tripwire)
+  --fail-on-source-writes  exit non-zero if an install edited your source tree outside deps/lockfiles
+                       (a tripwire after the fact: the tree is writable, so review with git diff)
   --canaries           plant fake AWS/Stripe/Slack credentials in the install container and watch
        --no-canaries   the egress proxy for them; if a planted token leaves the box it's caught as
                        an exfiltration attempt (fails the run). Allowlist egress only; on by default
@@ -251,8 +262,8 @@ Globals (before the command):
 
 Turn it off: SANDBOX_OFF=1 runs one command (or, exported, a whole shell) straight on the host with
 no container. For a trusted repo, set "off": true in sandbox.config.json (whole team) or
-sandbox.config.local.json (just you) so a globally-wired \`sandbox path install\` stops sandboxing
-here. Sandbox-only commands (check, doctor, init, verify, …) keep working either way.
+sandbox.config.local.json (just you). Sandbox-only commands (check, doctor, init, verify, …) keep
+working either way.
 
 Logging: human lines on stderr by default; set SANDBOX_LOG=json for NDJSON,
 SANDBOX_LOG_LEVEL=debug|info|warn|error to filter.
@@ -267,6 +278,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     frozen: false,
     dev: false,
     failOnEgress: false,
+    failOnSourceWrites: false,
     fullNetwork: false,
     envNames: [],
     envFiles: [],
@@ -297,6 +309,7 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
     else if (a === '--dev') globals.dev = true;
     else if (a === '--frozen') globals.frozen = true;
     else if (a === '--fail-on-egress') globals.failOnEgress = true;
+    else if (a === '--fail-on-source-writes') globals.failOnSourceWrites = true;
     else if (a === '--risk') {
       const v = argv[++i];
       globals.risk = v === 'off' ? 'off' : v === 'thorough' ? 'thorough' : 'basic';
@@ -396,7 +409,7 @@ function runOnHost(argv: string[], cwd: string, globals: Globals): number {
     console.log(JSON.stringify({ off: true, reason, host: true, argv }, null, 2));
     return 0;
   }
-  log.warn(`sandbox is OFF (${reason}), running on the host without containment: ${argv.join(' ')}`);
+  log.warn(`containment is off (${reason}). Running on the host: ${argv.join(' ')}`);
   const [program, ...rest] = argv;
   const result = spawnSync(program!, rest, { cwd, stdio: 'inherit' });
   if (result.error) fail(`could not run '${program}' on the host: ${result.error.message}`);
@@ -505,7 +518,7 @@ function resolveCommand(cmd: string, args: string[], facts: ProjectFacts): Route
     return { model: 'run', argv: pmScriptArgv(facts.pm, scriptName, args) };
   }
   if (facts.scripts[cmd]) return { model: 'run', argv: pmScriptArgv(facts.pm, cmd, args) };
-  fail(`unknown command '${cmd}'\n  try a command you know:  sandbox npm install · sandbox pnpm add zod · sandbox npm run dev · sandbox dev\n  or a sandbox command:     init · setup · allow · check · doctor · build · install · add · remove · script · run · x · shell`);
+  fail(`unknown command '${cmd}'\n  try a command you know:  sandbox install · sandbox add zod · sandbox dev · sandbox x vite\n  or a sandbox command:     init · setup · allow · check · doctor · build · install · add · remove · script · run · x · shell`);
 }
 
 /**
@@ -570,8 +583,16 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
       return planAudit(config, facts, route.argv, opts);
     case 'auditSignatures':
       return planAuditSignatures(config, { ...facts, pm: route.pm }, pmAuditSignaturesArgv(route.pm, route.args), opts);
-    case 'run':
+    case 'run': {
+      // `sandbox x` / `sandbox npx` / `pnpm dlx` can FETCH a package as a fallback, so the runner
+      // wants the install-class network defaults (registry-only allowlist), not the generic run
+      // default of network:none. Local bins still work fine through the same path.
+      if (execPackageTargets(route.argv).length) {
+        const runnerCfg = { ...config, run: { ...config.run, network: config.install.network, devPorts: false, ports: [] } };
+        return planRun(runnerCfg, facts, route.argv, opts);
+      }
       return planRun(config, facts, route.argv, opts);
+    }
   }
 }
 
@@ -580,7 +601,7 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
  * invisible-when-clean behaviour) lives in {@link planRiskHintLog} so it stays testable; this just
  * routes each line to the matching logger method.
  */
-function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], opts: { contained: boolean } = { contained: true }): void {
+function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], opts: { contained: boolean; pm?: PackageManager } = { contained: true }): void {
   for (const { level, text } of planRiskHintLog(targets.length, allHints, opts)) log[level](text);
 }
 
@@ -882,16 +903,6 @@ function logKnownBadHits(hits: KnownBadHit[]): void {
   log.error(lines.join('\n'));
 }
 
-/** The gate policy resolved for one route — flags override config, config fills the rest. */
-interface ActivePolicy {
-  riskHints: boolean;
-  minReleaseAgeDays: number;
-  failOnAdvisory: boolean;
-  failOnDeprecated: boolean;
-  failOnRisk: boolean;
-  deep: boolean;
-  policy: PreflightPolicy;
-}
 
 /**
  * `forceCheck` is set by the explicit `check`/`preflight` commands: they ALWAYS query the OSV
@@ -926,23 +937,6 @@ function resolvePolicy(globals: Globals, config: SandboxConfig, route: Route, fo
   };
 }
 
-function deprecatedHints(result: PreflightResult): RiskHint[] {
-  return result.hints.filter((h) => h.code === 'deprecated');
-}
-
-function nothingToCheck(ap: ActivePolicy): boolean {
-  return !ap.riskHints && !ap.policy.advisories && ap.minReleaseAgeDays === 0;
-}
-
-function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefined {
-  if (result.knownBadHits.length) return 1;
-  if (result.ageViolations.length) return 1;
-  if (result.advisoryHits.some((h) => h.malware)) return 1;
-  if (ap.failOnDeprecated && deprecatedHints(result).length) return 1;
-  if (ap.riskHints && result.hints.length && ap.failOnRisk) return 1;
-  return undefined;
-}
-
 function logDeprecatedGate(hints: RiskHint[], failOnDeprecated: boolean): number | undefined {
   if (!hints.length) return undefined;
   const list = hints.map((h) => `  ${h.package}${h.version ? `@${h.version}` : ''}, ${h.message}`);
@@ -974,47 +968,103 @@ function logDeep(ap: ActivePolicy, result: PreflightResult, pm: PackageManager):
  * blocking exit code. Logging short-circuits at the first block (release-age → malware →
  * `--fail-on-risk`). Everything fails open on a lookup error. `--json`/`--dry-run` skip it entirely.
  */
-async function preflightRoute(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route): Promise<number | undefined> {
-  if (globals.json || globals.dryRun) return undefined;
-  const ap = resolvePolicy(globals, config, route);
-  const knownBad = loadKnownBad(facts.cwd);
-  if (nothingToCheck(ap) && !knownBad.length) return undefined;
-
+/**
+ * Compute and apply the safe-install freshness substitution for an `add` route. Deliberately isolated
+ * from the gate path and from the risk-hint DISPLAY toggle, so it behaves the same on the real install,
+ * under `--risk off` (which silences the advisory report but must not silently disable the freshness
+ * hold-back), and in `--json`/`--dry-run` previews (where the previewed plan has to be the one that
+ * actually runs). When the gate already resolved the registry WITH risk display on, those hints are
+ * reused (`preHints`); otherwise a dedicated freshness-only resolve runs here. Fails open: a registry
+ * error yields no substitution. `--fail-on-risk` opts out entirely (the operator gates risk manually).
+ */
+async function safeInstallRewrite(globals: Globals, config: SandboxConfig, facts: ProjectFacts, ap: ActivePolicy, route: Route, preHints?: RiskHint[]): Promise<{ route: Route; subs: Substitution[] }> {
+  if (route.model !== 'add' || !config.install.safeInstall || ap.failOnRisk) return { route, subs: [] };
   const targets = riskTargetsForRoute(route, facts);
-  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd, knownBad });
-  logDeep(ap, result, facts.pm);
+  // Use the route's pm, not the lockfile-probed facts.pm: `sandbox npm add x` in a pnpm repo must
+  // rewrite with npm's flag/alias semantics (the manager the command actually runs), exactly as
+  // planForRoute threads route.pm. riskHints:true here is the COMPUTE switch (resolve packuments +
+  // derive recent_version); we consume only the freshness signal, so `--risk off` still silences the
+  // advisory report elsewhere.
+  const hints = preHints ?? (await runPreflight(targets, { riskHints: true, thorough: false, minReleaseAgeDays: 0, releaseAgeExclude: [], deep: false, advisories: false }, { pm: route.pm, cwd: facts.cwd })).hints;
+  // Honor BOTH freshness trust lists, same as the release-age gate: the committed
+  // install.minReleaseAgeExclude (e.g. "our own @scope/* is allowed fresh") and the ad-hoc
+  // --allow-recent. ap.policy.releaseAgeExclude is exactly that combined set.
+  const subs = freshSubstitutions(hints, targets.map((t) => t.name), { allowRecent: ap.policy.releaseAgeExclude });
+  if (!subs.length) return { route, subs: [] };
+  return { route: { ...route, pkgs: rewriteAddArgs(route.pkgs, subs, route.pm, config.install.pinExact) }, subs };
+}
 
-  // Blocklist / malware-feed match — an explicit team decision, so it blocks ahead of everything.
-  if (result.knownBadHits.length) {
-    logKnownBadHits(result.knownBadHits);
-    return 1;
+async function preflightRoute(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route): Promise<{ block: number } | { route: Route }> {
+  const ap = resolvePolicy(globals, config, route);
+  // Gate and report under the pm the command will actually run, not the repo-probed one (cross-PM
+  // passthrough). gateFacts re-points the target derivation (incl. the --deep lockfile read) at it.
+  const pm = effectivePm(route, facts.pm);
+  const gateFacts: ProjectFacts = { ...facts, pm };
+
+  // --json / --dry-run previews don't gate or block, but they MUST reflect safe-install, or the plan
+  // they show is not the plan that runs (agents and CI read these to know exactly what will happen).
+  if (globals.json || globals.dryRun) {
+    return { route: (await safeInstallRewrite(globals, config, facts, ap, route)).route };
   }
-  // Release-age gate — the strongest control, so it blocks first.
-  if (result.ageViolations.length) {
-    const suggestions = await suggestPins(result.ageViolations, ap.minReleaseAgeDays);
-    logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
-    return 1;
-  }
-  // Known-malware advisory.
-  if (result.advisoryHits.length) {
-    logAdvisoryHits(result.advisoryHits);
-    if (result.advisoryHits.some((h) => h.malware)) {
-      log.error('blocking: a version is flagged as malware and --fail-on-advisory is set');
-      return 1;
+
+  const knownBad = loadKnownBad(facts.cwd);
+  const nothing = nothingToCheck(ap) && !knownBad.length;
+  const wantSafe = route.model === 'add' && config.install.safeInstall && !ap.failOnRisk;
+  if (nothing && !wantSafe) return { route };
+
+  const targets = riskTargetsForRoute(route, gateFacts);
+  // Run the gate preflight only when there's something to gate. With nothing to gate but safe-install to
+  // do (e.g. `--risk off` with the default safeInstall on), skip straight to the substitution below.
+  let result: PreflightResult | undefined;
+  if (!nothing) {
+    result = await runPreflight(targets, ap.policy, { pm, cwd: facts.cwd, knownBad });
+    logDeep(ap, result, pm);
+    // Blocklist / malware-feed match — an explicit team decision, so it blocks ahead of everything.
+    if (result.knownBadHits.length) {
+      logKnownBadHits(result.knownBadHits);
+      return { block: 1 };
     }
+    // Release-age gate — the strongest control, so it blocks first.
+    if (result.ageViolations.length) {
+      const suggestions = await suggestPins(result.ageViolations, ap.minReleaseAgeDays);
+      logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, pm, suggestions, gatingExistingDeps(route));
+      return { block: 1 };
+    }
+    // Known-malware advisory.
+    if (result.advisoryHits.length) {
+      logAdvisoryHits(result.advisoryHits);
+      if (result.advisoryHits.some((h) => h.malware)) {
+        log.error('blocking: a version is flagged as malware and --fail-on-advisory is set');
+        return { block: 1 };
+      }
+    }
+    // Deprecated version — its own gate, blocked by default.
+    const depExit = logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
+    if (depExit !== undefined) return { block: depExit };
   }
-  // Deprecated version — its own gate, blocked by default.
-  const depExit = logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
-  if (depExit !== undefined) return depExit;
-  // Advisory/risk hints — advisory by default, blocking only with --fail-on-risk.
-  if (ap.riskHints) {
-    logRiskHints(targets, result.hints);
+
+  // Safe install: isolated from the risk-hint DISPLAY toggle. Reuse the gate's hints only when it ran
+  // with risk display on (so they already carry the freshness signal); otherwise resolve freshness here.
+  const { route: rewritten, subs } = await safeInstallRewrite(globals, config, facts, ap, route, result && ap.riskHints ? result.hints : undefined);
+  const subNames = new Set(subs.map((s) => s.name));
+
+  // Advisory/risk hints — advisory by default, blocking only with --fail-on-risk. The freshness hints
+  // we're about to act on are dropped from the report (the receipt below is the authoritative line);
+  // when --fail-on-risk is set nothing is substituted, so nothing is filtered and the block shows it all.
+  if (ap.riskHints && result) {
+    const reportHints = result.hints.filter((h) => !(h.code === 'recent_version' && subNames.has(h.package)));
+    logRiskHints(targets, reportHints, { contained: true, pm });
     if (result.hints.length && ap.failOnRisk) {
       log.error('blocking because --fail-on-risk is set');
-      return 1;
+      return { block: 1 };
     }
   }
-  return undefined;
+  if (subs.length && route.model === 'add') {
+    // A substitution forces the command-wide exact flag, so co-installed packages land exact too unless
+    // the user already opted into pinExact. Name them in the receipt so it isn't a silent surprise.
+    log.info(formatSafeReceipt(subs, config.install.pinExact ? [] : incidentallyPinned(route.pkgs, subs)));
+  }
+  return { route: rewritten };
 }
 
 function renderPreflightJson(result: PreflightResult, suggestions: PinSuggestion[], blocked: boolean, pm: PackageManager): string {
@@ -1045,7 +1095,9 @@ function renderPreflightJson(result: PreflightResult, suggestions: PinSuggestion
  */
 async function runPreflightCommand(globals: Globals, config: SandboxConfig, facts: ProjectFacts, route: Route, opts: { force?: boolean } = {}): Promise<number> {
   const ap = resolvePolicy(globals, config, route, opts.force);
-  const targets = riskTargetsForRoute(route, facts);
+  // Mirror the command's real pm (cross-PM passthrough), so the report and pin lines match what runs.
+  const pm = effectivePm(route, facts.pm);
+  const targets = riskTargetsForRoute(route, { ...facts, pm });
   const knownBad = loadKnownBad(facts.cwd);
 
   if (nothingToCheck(ap) && !knownBad.length) {
@@ -1054,22 +1106,22 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
     return 0;
   }
 
-  const result = await runPreflight(targets, ap.policy, { pm: facts.pm, cwd: facts.cwd, knownBad });
+  const result = await runPreflight(targets, ap.policy, { pm, cwd: facts.cwd, knownBad });
   const suggestions = result.ageViolations.length ? await suggestPins(result.ageViolations, ap.minReleaseAgeDays) : [];
   const exit = blockExit(result, ap) ?? 0;
 
   if (globals.json) {
-    console.log(renderPreflightJson(result, suggestions, exit !== 0, facts.pm));
+    console.log(renderPreflightJson(result, suggestions, exit !== 0, pm));
     return exit;
   }
 
   // Human report: log every finding (no short-circuit — this is a report, not a gate).
-  logDeep(ap, result, facts.pm);
+  logDeep(ap, result, pm);
   if (result.knownBadHits.length) logKnownBadHits(result.knownBadHits);
-  if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
+  if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, pm, suggestions, gatingExistingDeps(route));
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
-  if (ap.riskHints) logRiskHints(targets, result.hints, { contained: false });
+  if (ap.riskHints) logRiskHints(targets, result.hints, { contained: false, pm });
 
   if (exit) log.error('preflight: would BLOCK this install, resolve the findings above, or re-run with an override flag');
   else log.info('preflight: no blocking findings, safe to install');
@@ -1249,14 +1301,14 @@ function parseUpgradeArgs(args: string[]): UpgradeArgs {
  * from sandbox.config.json drives ncu's `--cooldown`, so the user never re-types it and the two can't
  * drift. ncu (host-only: it just reads/writes package.json + queries the registry) proposes; the SAME
  * gate engine the install path uses vets the proposed versions; only on `--write` does it rewrite
- * package.json and then materialise the change through the JAILED install. Blocked upgrades never write.
+ * package.json and then apply the change through the JAILED install. Blocked upgrades never write.
  */
 async function runUpgradeCommand(
   globals: Globals,
   config: SandboxConfig,
   facts: ProjectFacts,
   args: string[],
-  materialize: () => Promise<number>,
+  installContained: () => Promise<number>,
   ncu: NcuRunner = defaultNcuRunner(),
 ): Promise<number> {
   const ua = parseUpgradeArgs(args);
@@ -1352,7 +1404,7 @@ async function runUpgradeCommand(
     return 1;
   }
   log.info(`upgrade: package.json updated (${rows.length} dep(s)); installing in the sandbox to refresh the lockfile …`);
-  return materialize();
+  return installContained();
 }
 
 /**
@@ -1406,7 +1458,16 @@ function maybeNotifyUpdate(globals: Globals, cliEntry: string, rootDir: string, 
 async function main(): Promise<number> {
   const rawArgv = process.argv.slice(2);
   const selfArgv = unwrapSelfInvocation(rawArgv);
-  const { globals, cmd, args } = parse(selfArgv ?? rawArgv);
+  // Multi-call binary: `sandbox-pnpm add zod` (or `spnpm add zod`) is THIS bundle fronting a package
+  // manager. The bin/ launcher sets SANDBOX_PM_BIN to the leader (a PM shim can re-exec us and lose
+  // argv[0], so the bin name alone isn't reliable); `leaderForBin` is the fallback for running the
+  // bundle directly under a `sandbox-<pm>`-named symlink. The leader (pnpm) is implicit, so parse the
+  // args normally and fold the parsed command back in as the PM's first argument, which keeps global
+  // flags working. A `sandbox-<pm>` run always containerizes, exactly like `sandbox <pm>`.
+  const binLeader = process.env.SANDBOX_PM_BIN ?? leaderForBin(path.basename(process.argv[1] ?? ''));
+  const parsed = parse(selfArgv ?? rawArgv);
+  const globals = parsed.globals;
+  const { cmd, args } = foldBinLeader(binLeader, parsed);
   if (selfArgv) {
     const shown = ['sandbox', ...selfArgv].join(' ').trim();
     // Action + why, in one line: what we're doing, and the plain reason it's safe/expected.
@@ -1590,11 +1651,13 @@ async function main(): Promise<number> {
       console.log('');
       console.log(pinned ? 'Base image: pinned by digest (a # renovate: annotation lets Renovate keep it current, if this repo uses Renovate).' : `Base image: ${BASE_IMAGE} (tag only; couldn't reach the registry to pin a digest). Re-run \`sandbox devcontainer init --force\` while online to pin it.`);
       console.log(firewall ? 'Egress firewall: ON (same allowlist as your install egress + Claude domains).' : 'Egress firewall: off (config allows full network).');
+      console.log('node_modules: a named Docker volume (not your host folder), so the Linux tree never');
+      console.log('  reaches your host and macOS/Windows file I/O stays fast. Deps install on container create.');
       console.log('');
       console.log('Next:');
       console.log('  1. Open this folder in VS Code → "Reopen in Container" (or Codespaces).');
-      console.log('  2. Inside the container: run `claude`, then plain `npm install`. The whole');
-      console.log('     environment IS the sandbox, so do NOT use `sandbox npm install` in here.');
+      console.log('  2. Deps install automatically into the volume on first open. The whole environment');
+      console.log('     IS the sandbox, so inside, run plain `npm install` (never `sandbox install` or `sandbox npm install`).');
       return 0;
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
@@ -1620,41 +1683,11 @@ async function main(): Promise<number> {
     // for the whole team. Idempotent; only relevant when the project never ran init/setup.
     if (ensureLocalConfigIgnored(context.rootDir)) log.info(`added ${path.basename(file)} to .gitignore so it can't be committed`);
     if (cmd === 'off') {
-      log.warn(`containment OFF for this project, wrote off:true to ${file}. \`sandbox npm install\` now runs on the host. Re-enable: \`sandbox on\``);
+      log.warn(`containment is now off for this project. Wrote off:true to ${file}. Future sandbox commands here run on the host. Re-enable containment: \`sandbox on\`.`);
       if (process.env.SANDBOX_OFF) log.info('note: SANDBOX_OFF is also set in this shell, so sandbox stays off here until you unset it too');
     } else {
-      log.info(`containment ON, wrote off:false to ${file}. Installs run in the sandbox again.${process.env.SANDBOX_OFF ? ' (SANDBOX_OFF is still set in this shell, unset it to take effect)' : ''}`);
+      log.info(`containment is on again for this project. Wrote off:false to ${file}. Sandbox commands use the container again.${process.env.SANDBOX_OFF ? ' SANDBOX_OFF is still set in this shell, so unset it before retrying.' : ''}`);
     }
-    return 0;
-  }
-
-  if (cmd === 'path') {
-    const action = args.find((a) => !a.startsWith('-')) ?? 'install';
-    const shellIdx = args.indexOf('--shell');
-    const shellArg = shellIdx >= 0 ? args[shellIdx + 1] : undefined;
-    if (shellArg !== undefined && !SHELLS.includes(shellArg as Shell)) fail(`unknown --shell '${shellArg}' (use: ${SHELLS.join(' | ')})`);
-    const shell: Shell = (shellArg as Shell | undefined) ?? detectShell();
-    const print = args.includes('--print');
-    let result: PathActionResult;
-    switch (action) {
-      case 'install':
-        result = installPath({ shell, print });
-        break;
-      case 'print':
-        result = installPath({ shell, print: true });
-        break;
-      case 'uninstall':
-      case 'remove':
-        result = uninstallPath({ shell });
-        break;
-      case 'status':
-        result = statusPath({ shell });
-        break;
-      default:
-        fail('usage: sandbox path <install|uninstall|status|print> [--shell zsh|bash|fish|pwsh] [--print]');
-    }
-    for (const m of result.messages) console.log(m);
-    if (result.snippet) console.log(`\n${result.snippet}\n`);
     return 0;
   }
 
@@ -1696,7 +1729,7 @@ async function main(): Promise<number> {
     for (;;) {
       let result: ExecuteResult;
       try {
-        result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+        result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, failOnSourceWrites: globals.failOnSourceWrites || config.install.failOnSourceWrites, ...(canary ? { canary } : {}) });
       } catch (e) {
         // Turn a cryptic build/run failure into the friendly "is Docker running?" guidance when that's
         // the real cause; otherwise let the original error surface.
@@ -1732,7 +1765,7 @@ async function main(): Promise<number> {
           }
           log.warn(`${pending.length} package(s) want to run install scripts but aren't approved yet: ${pending.join(', ')}`);
           log.info(`approve (contained in the sandbox) and re-install:  ${renderApproveBuildsCommand(pending)}`);
-          log.info('or approve all without prompting:  add --allow-all-builds to your install');
+          log.info(`or approve all without prompting:  ${renderSandboxRetry('--allow-all-builds', cmd, args)}`);
           return result.code === 0 ? 1 : result.code;
         }
       }
@@ -1787,9 +1820,9 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'upgrade') {
-    // On --write, materialise the rewritten package.json through the jailed install path.
-    const materialize = () => emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
-    return runUpgradeCommand(globals, config, facts, args, materialize);
+    // On --write, install the rewritten package.json through the jailed install path.
+    const installContained = () => emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
+    return runUpgradeCommand(globals, config, facts, args, installContained);
   }
 
   if (cmd === 'check') {
@@ -1819,13 +1852,39 @@ async function main(): Promise<number> {
   // A global install is host tooling — running it in an ephemeral container installs nothing on the
   // host, so refuse with guidance rather than silently no-op (the path wrappers also pass these through).
   if (isGlobalInstall(cmd, route, args)) {
-    log.warn('global installs run on the host, not in the sandbox, a -g install in an ephemeral container installs nothing on your machine');
-    log.info(`run it on the host instead:  command ${cmd} ${args.join(' ')}    (or: SANDBOX_OFF=1 ${cmd} ${args.join(' ')})`);
+    log.warn('This is a global install. Running it in a throwaway container would not install anything on your machine.');
+    log.info(`Run it on the host instead: command ${cmd} ${args.join(' ')} (or: SANDBOX_OFF=1 ${cmd} ${args.join(' ')})`);
     return 1;
   }
-  const blocked = await preflightRoute(globals, config, facts, route);
-  if (blocked !== undefined) return blocked;
-  return emit(planForRoute(route, config, facts, opts));
+  const outcome = await preflightRoute(globals, config, facts, route);
+  if ('block' in outcome) return outcome.block;
+  // Skipped for --json/--dry-run previews (no side effect to orient or guard).
+  const writePm = !globals.json && !globals.dryRun ? containerWritePm(outcome.route) : undefined;
+  if (writePm) {
+    const host = hostPlatform();
+    const mode = detectProjectMode(facts.cwd, host);
+    // One orienting line before any contained write: package manager, project mode, containment. One
+    // line, always, so the write says what it's doing without narrating the boundary on later lines.
+    log.info(orientLine({ pm: writePm, mode, contained: true }));
+    // Louder, only when it matters: a contained install rebuilds node_modules as a Linux tree, so when
+    // the project already has a host-native (local) tree, warn before clobbering it and (on a TTY) let
+    // the user confirm the switch. `host-native` IS the cross-mode case (non-Linux host with host-native
+    // binaries present), so the mode we already detected is the trigger; crossModeWarning owns the copy.
+    if (mode === 'host-native') {
+      const warning = crossModeWarning({ hostOs: host.os, hostNativeCount: () => 1, pm: writePm });
+      if (warning) {
+        log.warn(warning);
+        if (process.stdin.isTTY && process.stdout.isTTY) {
+          const ok = await confirm({ message: 'Switch this project to container-built node_modules now?' });
+          if (isCancel(ok) || !ok) {
+            log.info('Kept this project on host-native deps. Nothing was installed. Use a plain host install to stay local.');
+            return 0;
+          }
+        }
+      }
+    }
+  }
+  return emit(planForRoute(outcome.route, config, facts, opts));
 }
 
 main()

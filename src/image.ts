@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SandboxConfig } from './config.js';
 import { parsePackageManagerField } from './package-manager.js';
 
@@ -63,6 +64,8 @@ export function resolveBaseImage(build: SandboxConfig['build']): string {
  * the Dockerfile). A project pinning one of these needs no extra build step.
  */
 export const BAKED_COREPACK: Record<string, string> = { pnpm: '9.15.0', yarn: '1.22.22' };
+/** Modern Yarn cached in the image for `yarn dlx` when a repo hasn't pinned Yarn Berry yet. */
+export const BAKED_YARN_DLX = '4.14.1';
 
 /**
  * The `corepack prepare` step for a project's pinned `packageManager`, so the exact
@@ -119,11 +122,32 @@ export function resolveBuildSpec(config: SandboxConfig, tag: string, contextDir:
 /** Image label that records which build spec produced an image (drives rebuild-on-change). */
 export const SPEC_LABEL = 'dev.sandbox-node.spec';
 
+function bundledImageRoot(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(path.join(dir, 'Dockerfile'))) return dir;
+    dir = path.dirname(dir);
+  }
+  throw new Error('sandbox: cannot locate bundled Dockerfile for fingerprinting');
+}
+
 /**
- * Stable fingerprint of everything that affects the built image: base, extra packages/steps,
- * and — for the custom path — the Dockerfile's path AND its current contents. Stamped onto the
- * image as {@link SPEC_LABEL} so a config (or custom-Dockerfile) change forces a rebuild instead
- * of silently reusing a stale tag.
+ * The managed image depends on the bundled Dockerfile plus the helper files it COPYs into the
+ * image. Fold those contents into the fingerprint so a local code change rebuilds the image even
+ * when the user-facing config did not change.
+ */
+export function bundledImageMaterial(root: string = bundledImageRoot()): string {
+  return JSON.stringify({
+    dockerfile: readFileSync(path.join(root, 'Dockerfile'), 'utf8'),
+    netGuard: readFileSync(path.join(root, 'net-guard.sh'), 'utf8'),
+  });
+}
+
+/**
+ * Stable fingerprint of everything that affects the built image: base, extra packages/steps, the
+ * bundled managed-image recipe, and — for the custom path — the Dockerfile's path AND its current
+ * contents. Stamped onto the image as {@link SPEC_LABEL} so a config or recipe change forces a
+ * rebuild instead of silently reusing a stale tag.
  */
 export function specFingerprint(spec: BuildSpec): string {
   const custom = spec.customDockerfile;
@@ -131,6 +155,7 @@ export function specFingerprint(spec: BuildSpec): string {
     base: spec.baseImage,
     pkgs: spec.extraPackages,
     steps: spec.extraSteps,
+    bundled: custom ? null : bundledImageMaterial(),
     custom: custom ?? null,
     customContent: custom && existsSync(custom) ? readFileSync(custom, 'utf8') : null,
   });

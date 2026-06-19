@@ -30,7 +30,9 @@ export const PRESETS: Record<PresetName, Preset> = {
     // (thorough) risk-signal set, and blocks any version flagged as malware in OSV.
     // Canaries on: strict installs run registry-only, so the egress proxy is always watching — plant
     // honeytokens so a credential-theft attempt is caught in the act, not just blocked anonymously.
-    config: { install: { frozen: true, minReleaseAgeDays: 7, failOnAdvisory: true, riskHints: 'thorough', canaries: true } },
+    // failOnSourceWrites on: frozen already gives a read-only tree on npm/yarn/bun; this catches the
+    // pnpm-writable-root case, so a strict install that edits your source fails instead of passing quietly.
+    config: { install: { frozen: true, minReleaseAgeDays: 7, failOnAdvisory: true, riskHints: 'thorough', canaries: true, failOnSourceWrites: true } },
   },
   balanced: {
     name: 'balanced',

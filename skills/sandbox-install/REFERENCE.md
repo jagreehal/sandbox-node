@@ -1,4 +1,4 @@
-# sandbox-install — reference
+# sandbox-install reference
 
 CLI: `@jagreehal/sandbox-node` (binaries: `sandbox`, `sandbox-node`).
 
@@ -21,18 +21,18 @@ sandbox [gate flags] check  [pkgs… | file.json | <pm> <cmd> …]
 sandbox [gate flags] preflight [<pm> <cmd> …]
 ```
 
-Runs the same gates as a real install but **never installs**, and needs **no Docker** — it only
+Runs the same gates as a real install but **never installs**, and needs **no Docker**: it only
 queries the registry + OSV. Reports findings and exits non-zero when the matching install would have
 been blocked. `check` always queries OSV (so advisories show without `--fail-on-advisory`; that flag
 only makes them *block*). `preflight` is the command-mirroring sibling.
 
-- `sandbox check express lodash@4` — bare package names (the direct package-name form)
-- `sandbox check` — the whole project: root manifest **+ every workspace package.json**, deduped
-- `sandbox check ./packages/api/package.json` — the deps in a specific manifest (workspace-aware for
+- `sandbox check express lodash@4`: bare package names (the direct package-name form)
+- `sandbox check`: the whole project: root manifest **+ every workspace package.json**, deduped
+- `sandbox check ./packages/api/package.json`: the deps in a specific manifest (workspace-aware for
   a `package.json`; relative paths resolve from the current directory)
-- `sandbox --min-release-age 7 check npm install` — check a plain install (command form)
-- `sandbox --fail-on-advisory preflight pnpm add zod` — check what adding `zod` would pull
-- `sandbox preflight npx cowsay` — check the package a fetch-and-run would execute
+- `sandbox --min-release-age 7 check npm install`: check a plain install (command form)
+- `sandbox --fail-on-advisory preflight pnpm add zod`: check what adding `zod` would pull
+- `sandbox preflight npx cowsay`: check the package a fetch-and-run would execute
 
 Exit codes: **0** = no blocking findings (safe to install); **1** = would block.
 
@@ -70,7 +70,7 @@ Real preflight from `sandbox --json --fail-on-risk --fail-on-advisory --min-rele
       "package": "left-pad",
       "version": "1.3.0",
       "severity": "warn",
-      "message": "published 2 hours ago — install still contained"
+      "message": "published 2 hours ago, install still contained"
     }
   ],
   "ageViolations": [
@@ -123,8 +123,8 @@ workspace package's deps** (npm/yarn/bun `workspaces` or `pnpm-workspace.yaml`),
 manifest, because `install` at the root pulls them all. Local `workspace:`/`file:`/`link:` deps are
 skipped (nothing to fetch).
 
-**`--deep`** extends the **blocking** gates — release-age, **deprecated**, and **malware** (with
-`--fail-on-advisory`) — to the whole transitive tree from the lockfile, at the **exact locked
+**`--deep`** extends the **blocking** gates (release-age, **deprecated**, and **malware** with
+`--fail-on-advisory`) to the whole transitive tree from the lockfile, at the **exact locked
 versions** (so it catches the version actually installed, not the latest the range resolves to). It
 reads one packument per package (age + deprecation come from the same fetch) plus OSV queries for
 malware. Risk *hints* (bin/script/recent) stay direct-only; they're advisory, not worth tree-wide.
@@ -151,33 +151,53 @@ than wedging the install.
 - Exit code: `0` (applied, nothing to do, or clean preview), `1` (a proposal hit a gate, nothing
   written). On `--json`, `blocked: true` means do not proceed without user approval.
 
-## `path` command (route bare installs automatically)
+## Write commands (the default path)
 
-So a human doesn't have to remember the `sandbox` prefix, `sandbox path install` writes shell
-functions into their rc file (zsh/bash/fish; pwsh is print-and-paste). After that, bare
-`npm/pnpm/yarn/bun install`, `add`, `ci`, `update`, `upgrade`, `audit fix`, and the fetch-and-run
-runners (`npx`/`bunx`/`pnpx`, `<pm> dlx`/`exec`) route through sandbox; read-only/build/run/publish
-commands hit the real tool untouched.
+The write path leads with three commands; sandbox auto-detects the package manager from the project,
+so you don't name it. Each vets the targets with the gate engine, then runs the install in a throwaway
+container. Before each contained write the CLI prints a one-line orient: `pnpm · container-built deps
+· contained` (package manager · project mode · containment).
 
-- `sandbox path install` — wire it (edits the rc, idempotent). `status` / `uninstall` / `print`
-  manage it; `--shell zsh|bash|fish|pwsh` targets a specific shell.
-- `sandbox setup` offers to wire it interactively (one keypress).
-- Escape hatches: `command npm …` (one call), `SANDBOX_OFF=1` (one command / a whole shell), or
-  `sandbox off` for a trusted repo (writes `off:true` to the git-ignored `sandbox.config.local.json`;
-  `sandbox on` re-enables). Turning it off from a personal layer warns loudly.
-- This is a **convenience guardrail, not a containment boundary**: it depends on the interactive
-  shell. The protection is `sandbox` running the install in a container; for CI use
-  `sandbox verify` + `--frozen --fail-on-egress`, for agents the `--agent` hook.
+- `sandbox install [pkgs]`: install (or add the named packages) through the gated native path.
+- `sandbox add <pkg...>`: add dependencies, saved as exact versions by default; this is where safe
+  install (above) applies.
+- `sandbox update`: update existing deps within their declared ranges. To move the ranges themselves,
+  use `sandbox upgrade` (above).
+- `sandbox remove <pkg...>`: uninstall. Fetches nothing new, so there's no gate surface, but it still
+  runs through sandbox.
+
+## Expert: per-PM binaries (same gated native path, shorter keystrokes)
+
+For a human who lives in their package manager's muscle memory, the per-PM binaries take the same
+contained path without the `sandbox` prefix or the auto-detect step, instead of shadowing their
+shell's `npm`/`pnpm` (which is bad DX). `sandbox-pnpm add zod` (short alias `spnpm add zod`) is the
+same keystrokes as `pnpm add zod`: it vets with the gate engine, then installs in a throwaway
+container, so lifecycle scripts can't reach the host. They are thin front-ends for `sandbox <pm>`:
+`spnpm add zod` == `sandbox pnpm add zod`. Binaries: `sandbox-npm`/`snpm`, `sandbox-pnpm`/`spnpm`,
+`sandbox-yarn`/`syarn`, `sandbox-bun`/`sbun`, `sandbox-npx`/`snpx`, `sandbox-bunx`/`sbunx`. The
+explicit `sandbox <pm> …` form names the package manager when you don't want to rely on detection.
+
+- Always containerized: the install runs inside the boundary (no host creds, default-deny egress,
+  `--cap-drop ALL`), exactly like `sandbox <pm>`.
+- The real `npm`/`pnpm` is never shadowed; the user opts in by typing the prefix.
+- One mode per project: a `sandbox-<pm>` install builds a container `node_modules` (Linux tree); the
+  user's own `pnpm install` keeps it local. Never both. sandbox tells them apart by the native
+  binaries in the tree, read live (so the signal can't go stale after a host install). Before
+  clobbering a host-native tree, sandbox warns (TTY: confirm the switch; CI / non-TTY: logs and
+  proceeds). For host tooling against a container tree, run it through `sandbox`, or use `sandbox
+  devcontainer init` to keep `node_modules` in a Docker volume.
+- CI enforcement: `sandbox verify` + `--frozen --fail-on-egress`; agents: the `--agent` hook or
+  `sandbox devcontainer init`.
 
 ## `approve-builds` command (resolve pnpm dependency build scripts)
 
 When pnpm blocks dependency build scripts it records placeholder values in `allowBuilds:` inside
 `pnpm-workspace.yaml` and exits. `sandbox` lets you record the decision without hand-editing YAML:
 
-- `sandbox approve-builds` — approve every pending package and re-run the install flow
-- `sandbox approve-builds esbuild sharp` — record decisions for specific packages
-- `sandbox approve-builds --deny sharp` — record `false` and remove `sharp` from `onlyBuiltDependencies`
-- `sandbox --allow-all-builds pnpm install` — approve every pending build script without prompting
+- `sandbox approve-builds`: approve every pending package and re-run the install flow
+- `sandbox approve-builds esbuild sharp`: record decisions for specific packages
+- `sandbox approve-builds --deny sharp`: record `false` and remove `sharp` from `onlyBuiltDependencies`
+- `sandbox --allow-all-builds pnpm install`: approve every pending build script without prompting
 
 On a TTY, `sandbox pnpm install`, `sandbox pnpm up`, and `sandbox pnpm audit --fix` prompt
 automatically, write `allowBuilds` plus `onlyBuiltDependencies`, then retry the command.
@@ -194,8 +214,8 @@ automatically, write `allowBuilds` plus `onlyBuiltDependencies`, then retry the 
 | `--deep` | Apply the age gate to the whole resolved tree (lockfile), not just direct deps. |
 | `--risk <off\|basic>` | Disable/enable registry risk hints. |
 | `--allow-all-builds` | Approve every pending pnpm dependency build script without prompting, then re-run the install-class command. Use only when the user has already approved that blanket choice. |
-| `--allow-build-hosts` | Add the curated native-build/release hosts (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron binaries) to the egress allowlist for this run. **Still default-deny** — a bigger allowlist, not full network. Use when a `postinstall` binary download is blocked; prefer `sandbox allow <host>` when only one host is needed. |
-| `--canaries` / `--no-canaries` | Plant fake AWS/Stripe/Slack honeytokens in the install container and fail the run if one reaches the egress proxy log — a credential-theft tripwire on top of default-deny egress. Allowlist egress only; **on by default in the `strict`/`agent` presets**. Names no package manager reads, so it can't break an install; `--no-canaries` turns it off for one run. Applies to the real install, not the `preflight` review pass. |
+| `--allow-build-hosts` | Add the curated native-build/release hosts (Node headers, GitHub releases, Prisma/Playwright/Cypress/Puppeteer/Electron binaries) to the egress allowlist for this run. **Still default-deny** (a bigger allowlist, not full network). Use when a `postinstall` binary download is blocked; prefer `sandbox allow <host>` when only one host is needed. |
+| `--canaries` / `--no-canaries` | Plant fake AWS/Stripe/Slack honeytokens in the install container and fail the run if one reaches the egress proxy log (a credential-theft tripwire on top of default-deny egress). Allowlist egress only; **on by default in the `strict`/`agent` presets**. Names no package manager reads, so it can't break an install; `--no-canaries` turns it off for one run. Applies to the real install, not the `preflight` review pass. |
 | `--dry-run` | Preview mounts/allowlist/command, then stop. On `install`/`add`/`run` this **skips the preflight**; use the `preflight` command for the review pass instead. |
 | `--json` | On `preflight`, prints the findings report (above). On `install`/`add`/`run`, prints the resolved plan and skips the preflight. |
 
@@ -210,18 +230,23 @@ Output shapes to recognize:
 
 - **Release-age block:** `blocked by the release-age gate (min 7 days)` followed by
   `<name>@<version> was published <N hours/days> ago`.
-- **Malware:** `<name>@<version> — KNOWN MALWARE advisory (MAL-…)` then
+- **Malware:** `<name>@<version> KNOWN MALWARE advisory (MAL-…)` then
   `blocking: a version is flagged as malware and --fail-on-advisory is set`.
-- **Advisory (non-malware):** `<name>@<version> — advisory <ids>`.
-- **Risk hints:** `N risk hint(s)` then per-package lines: `adds bin: <name>` (bin_exposed)
-  or a recent-version message (a `!!` prefix marks the strong severity).
+- **Advisory (non-malware):** `<name>@<version> advisory <ids>`.
+- **Risk hints:** `N thing(s) worth a look before installing`, worst-first (✖ error blocks
+  ahead of ⚠ warnings), then per-package lines. `N` counts real signals only: a `bin_exposed`
+  (`adds bin: <name>`) never counts and a package whose *only* signal is a bin stays silent
+  (it's still in `--json`); the bin line shows only next to another finding. A `recent_version`
+  message (`!!` marks strong severity) may carry an aged-version line:
+  `↳ <older> predates the worm window (published <N> ago): sandbox <pm> add <pkg>@<older>`, a
+  copy-pasteable older release, framed as age, not safety.
 
 ## Override recipes
 
 - Approve one fresh package, keep the gate otherwise:
-  `sandbox --allow-recent <pkg> --fail-on-advisory <pm> install`
+  `sandbox --allow-recent <pkg> --fail-on-advisory install`
 - Accept all fresh releases this once: add `--min-release-age 0`.
-- Pin a known-good older version instead of latest: `sandbox <pm> add <pkg>@<version>`.
+- Pin a known-good older version instead of latest: `sandbox add <pkg>@<version>`.
 - Native module's `postinstall` blocked on a build host (node-gyp/Prisma/Playwright/…):
   re-run with `--allow-build-hosts` (curated bundle, still default-deny), or allow the exact
   host: `sandbox allow <host>`. Persist for the project via the `build-tools` group in

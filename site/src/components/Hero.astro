@@ -1,7 +1,7 @@
 ---
-// Splash hero (overrides Starlight's default). The boundary IS the product: the risky
-// command runs inside a drawn box that can see the project + registry and nothing else;
-// the host's secrets sit outside it, struck through.
+// Splash hero (overrides Starlight's default). Gate-first: the everyday product vets a package
+// before it lands, then installs natively by default. The drawn box is the explicit boundary:
+// the risky command runs inside it when the user opts into `sandbox <pm>` or a devcontainer.
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const outside = [
   '~/.ssh keys',
@@ -15,15 +15,16 @@ const outside = [
 <div class="hero">
   <div class="hero__copy">
     <p class="hero__eyebrow">npm install runs code you never read</p>
-    <h1 class="hero__title">Run risky installs in a throwaway box.</h1>
+    <h1 class="hero__title">Catch a bad dependency before it lands.</h1>
     <p class="hero__lede">
-      Put <code>sandbox</code> in front of the <code>npm</code> / <code>pnpm</code> / <code>yarn</code> / <code>bun</code>
-      command you already run. Lifecycle scripts execute in a container that can reach your project and the
-      registry, and nothing else. Your laptop secrets stay out of reach.
+      Type <code>sandbox add zod</code> instead of <code>pnpm add zod</code>.
+      It vets the package first (malware, typosquats, fresh-release worm window), then installs it natively so
+      your IDE gets host-native binaries. Want the real boundary too? Use explicit <code>sandbox pnpm add zod</code>
+      or a devcontainer. Just want to look? <code>sandbox check zod</code> vets it with no install at all.
     </p>
 
-    <div class="hero__cmd" role="img" aria-label="sandbox npm install">
-      <span class="hero__prompt">$</span> sandbox npm&nbsp;install
+    <div class="hero__cmd" role="img" aria-label="sandbox add zod">
+      <span class="hero__prompt">$</span> sandbox add&nbsp;zod
     </div>
 
     <div class="hero__cta">
@@ -38,14 +39,14 @@ const outside = [
 
   <div class="hero__diagram">
     <figure class="boundary">
-      <figcaption class="boundary__label">throwaway container · deleted when it's done</figcaption>
+      <figcaption class="boundary__label">sandbox pnpm add · explicit throwaway-container boundary</figcaption>
       <div class="term" aria-hidden="true">
         <div class="term__bar"><span></span><span></span><span></span></div>
-        <pre class="term__body"><code><span class="l"><span class="c-prompt">$</span> sandbox npm install</span>
-<span class="l c-dim">sandbox: npm install → sandboxed</span>
-<span class="l c-dim">added 412 packages · postinstall ran here, not on your host</span>
-<span class="l c-ok">✓ done, ran in a throwaway sandbox, now deleted;</span>
-<span class="l c-ok">  it never had your credentials or home dir</span></code></pre>
+        <pre class="term__body"><code><span class="l"><span class="c-prompt">$</span> sandbox add lodahs</span>
+<span class="l c-danger">sandbox: ✖ blocked: 'lodahs' looks like a typosquat of 'lodash'</span>
+<span class="l"><span class="c-prompt">$</span> sandbox add zod</span>
+<span class="l c-ok">✓ gates passed, installing natively on the host</span>
+<span class="l c-dim">  (use sandbox pnpm add zod for the throwaway container)</span></code></pre>
       </div>
       <ul class="boundary__reach">
         <li class="reach reach--yes"><span class="reach__mark">✓</span> your project files</li>
@@ -53,7 +54,7 @@ const outside = [
       </ul>
     </figure>
 
-    <ul class="outside" aria-label="kept outside the box">
+    <ul class="outside" aria-label="kept outside the container">
       {outside.map((item) => (
         <li class="outside__item"><span class="outside__mark" aria-hidden="true">✕</span>{item}</li>
       ))}
@@ -109,7 +110,7 @@ const outside = [
     margin-top: var(--space-2xl);
     font-family: var(--sl-font-mono);
     font-size: 1.05rem;
-    color: var(--sl-color-white);
+    color: var(--sbx-term-fg);
     background: var(--sbx-term-bg);
     border: 1px solid var(--sbx-border);
     border-radius: 0.55rem;
@@ -162,11 +163,12 @@ const outside = [
   .term__bar { display: flex; gap: 0.4rem; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--sbx-border); }
   .term__bar span { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--sbx-border); }
   .term__body { margin: 0; padding: 0.9rem 1rem; font-family: var(--sl-font-mono); font-size: 0.8rem; line-height: 1.7; overflow-x: auto; }
-  .term__body code { color: var(--sl-color-gray-2); background: none; border: 0; padding: 0; }
+  .term__body code { color: var(--sbx-term-fg); background: none; border: 0; padding: 0; }
   .l { display: block; }
   .c-prompt { color: var(--sbx-accent); }
-  .c-dim { color: var(--sl-color-gray-4); }
+  .c-dim { color: color-mix(in oklch, var(--sbx-term-fg) 58%, transparent); }
   .c-ok { color: var(--sbx-accent-bright); }
+  .c-danger { color: var(--sbx-danger); }
 
   .boundary__reach { list-style: none; margin: var(--space-lg) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-lg); }
   .reach { display: inline-flex; align-items: center; gap: 0.5ch; font-size: 0.82rem; color: var(--sl-color-gray-2); }

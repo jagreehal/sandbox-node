@@ -72,6 +72,10 @@ html {
   --sbx-surface: oklch(0.205 0.013 150);
   --sbx-border: oklch(0.3 0.013 150);
   --sbx-term-bg: oklch(0.145 0.013 150);
+  /* The terminal box is dark in BOTH themes, so its text needs a fixed light foreground. Defined only
+     here (the light theme block does not override it), so it never flips to dark like --sl-color-white
+     does in light mode (which made the dark command box render dark-on-dark, unreadable). */
+  --sbx-term-fg: oklch(0.93 0.012 150);
 }
 
 /* ---- Light theme (warm paper, for daylight doc reading) ------------------ */

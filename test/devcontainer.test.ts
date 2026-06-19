@@ -39,29 +39,55 @@ describe('firewallAllowlist', () => {
 
 describe('devcontainerJson', () => {
   it('runs the agent as non-root so --dangerously-skip-permissions is accepted', () => {
-    expect(devcontainerJson(balanced).remoteUser).toBe('node');
+    expect(devcontainerJson(balanced, 'pnpm').remoteUser).toBe('node');
   });
 
   it('installs Claude Code via the official feature and persists ~/.claude', () => {
-    const json = devcontainerJson(balanced);
+    const json = devcontainerJson(balanced, 'pnpm');
     expect(Object.keys(json.features as object)[0]).toContain('anthropics/devcontainer-features/claude-code');
     expect((json.mounts as string[])[0]).toContain('/home/node/.claude');
   });
 
+  it('mounts node_modules as a named volume so the host never sees the container tree', () => {
+    const json = devcontainerJson(balanced, 'pnpm');
+    const nm = (json.mounts as string[]).find((m) => m.includes('/node_modules'));
+    expect(nm).toBeDefined();
+    expect(nm).toContain('type=volume');
+    // Targets the container workspace's node_modules, with a per-project (basename-keyed) volume name.
+    expect(nm).toContain('target=${containerWorkspaceFolder}/node_modules');
+    expect(nm).toContain('source=${localWorkspaceFolderBasename}-');
+  });
+
+  it('populates the volume on create with the project PM, chowning first (named volumes mount as root)', () => {
+    expect(devcontainerJson(balanced, 'pnpm').postCreateCommand).toContain('sudo chown node:node node_modules');
+    // pnpm/yarn go through Corepack so a host with no global shim still installs.
+    expect(devcontainerJson(balanced, 'pnpm').postCreateCommand).toContain('corepack pnpm install');
+    expect(devcontainerJson(balanced, 'npm').postCreateCommand).toContain('npm install');
+    expect(devcontainerJson(balanced, 'bun').postCreateCommand).toContain('bun install');
+  });
+
   it('grants firewall capabilities + a postStart hook when egress is restricted', () => {
-    const json = devcontainerJson(balanced);
+    const json = devcontainerJson(balanced, 'pnpm');
     expect(json.runArgs).toEqual(['--cap-add=NET_ADMIN', '--cap-add=NET_RAW']);
     expect(json.postStartCommand).toContain('init-firewall.sh');
   });
 
+  it('runs the firewall BEFORE the create-time install so that install is itself contained', () => {
+    const cmd = devcontainerJson(balanced, 'pnpm').postCreateCommand as string;
+    expect(cmd.indexOf('init-firewall.sh')).toBeLessThan(cmd.indexOf('corepack pnpm install'));
+  });
+
   it('omits the firewall wiring for full-network (trusted) configs', () => {
-    const json = devcontainerJson(trusted);
+    const json = devcontainerJson(trusted, 'pnpm');
     expect(json.runArgs).toBeUndefined();
     expect(json.postStartCommand).toBeUndefined();
+    // Still installs on create, just without the firewall prefix.
+    expect(json.postCreateCommand).not.toContain('init-firewall.sh');
+    expect(json.postCreateCommand).toContain('install');
   });
 
   it('forwards configured + dev-server ports for vibe', () => {
-    expect(devcontainerJson(vibe).forwardPorts).toContain(5173);
+    expect(devcontainerJson(vibe, 'pnpm').forwardPorts).toContain(5173);
   });
 });
 

@@ -37,8 +37,8 @@ export const SandboxConfigSchema = z
      * Turn containment OFF for this project: every operation command (`install`/`add`/`run`/`dev`/the
      * pass-through `sandbox npm …`) runs directly on the host, exactly as if you'd typed it without
      * `sandbox`. The escape hatch for a repo you trust — commit it in `sandbox.config.json`, or set it
-     * only for yourself in `sandbox.config.local.json` — so a globally-wired `sandbox path install`
-     * stops sandboxing here. The env var `SANDBOX_OFF=1` does the same for one command or one shell.
+     * only for yourself in `sandbox.config.local.json`. The env var `SANDBOX_OFF=1` does the same for
+     * one command or one shell.
      * Sandbox-only commands (`check`, `doctor`, `init`, `verify`, …) keep working regardless.
      */
     off: z.boolean().default(false),
@@ -108,9 +108,29 @@ export const SandboxConfigSchema = z
         // canary hit fails the run unconditionally. None of the planted names are read by npm/pnpm/
         // yarn/bun, so this can't break a real install.
         canaries: z.boolean().default(false),
+        // Tripwire for the writable source tree (the one surface NOT protected by default: a package
+        // manager needs a writable root, so a malicious install CAN edit src/). When true, an install
+        // that changes project files outside the dependency output and lockfiles FAILS the run, so CI or
+        // an agent notices and reverts. Detection after the fact, not prevention: the edit still happened
+        // (review with `git diff`). Off by default; the change is always reported + audited regardless.
+        failOnSourceWrites: z.boolean().default(false),
+        // Safe install by default: when `add`ing a package resolves to a freshly-published version
+        // (inside the worm window), install the newest release that already predates the window and
+        // pin it exact, instead of silently taking the fresh one. Your end goal is the install, so this
+        // keeps it moving while closing the publish-and-detonate gap, and prints exactly what it did.
+        // Only `add` (new deps); per-package `--allow-recent` (or this set false) takes the newest as
+        // typed. A substituted version is always pinned exact so the choice is reproducible. Independent
+        // of `riskHints`: `--risk off` silences the advisory report but does NOT disable this hold-back
+        // (set this false to opt out). `--json`/`--dry-run` previews show the substituted plan, not the
+        // version as typed, so a previewed plan matches the real run.
+        safeInstall: z.boolean().default(true),
+        // Also pin NON-substituted adds to an exact version (overriding the package manager's default
+        // ^range). Off by default: forcing exact on every add overrides a range convention you may have
+        // chosen deliberately. The safe substitution above is pinned exact regardless of this setting.
+        pinExact: z.boolean().default(false),
       })
       .strict()
-      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: false }),
+      .default({ network: 'allowlist', frozen: false, riskHints: 'basic', failOnRisk: false, minReleaseAgeDays: 0, minReleaseAgeExclude: [], failOnAdvisory: false, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: false, failOnSourceWrites: false, safeInstall: true, pinExact: false }),
     egress: z
       .object({ allow: z.array(z.string()).default(['npmjs.org', 'npmjs.com']) })
       .strict()

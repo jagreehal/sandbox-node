@@ -18,13 +18,16 @@ COPY net-guard.sh /usr/local/bin/sbx-net-guard
 RUN chmod +x /usr/local/bin/sbx-net-guard
 
 RUN corepack enable
-# Pre-activate pnpm + yarn so installs don't download a package manager at run time
-# (faster, and works under the no-network/allowlist phases). Silence the prompt.
+# Pre-activate pnpm + yarn classic so installs don't download a package manager at run time
+# (faster, and works under the no-network/allowlist phases). Also prefetch one modern
+# Yarn Berry for `yarn dlx` in lockfile-only repos, where no packageManager pin exists
+# yet to tell corepack what to bake. Silence the prompt.
 # A project that pins a *different* pnpm/yarn via package.json "packageManager" gets
 # that exact version baked as an extra build layer (see corepackPrepareStep in image.ts),
 # so corepack never has to fetch one through the egress proxy at run time.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack prepare pnpm@9.15.0 yarn@1.22.22 --activate
+RUN corepack prepare yarn@4.14.1
 
 # Bun ships as a standalone binary (not via corepack). Install it at build time so
 # `sandbox bun install/add` runs under the same no-network/allowlist phases as the

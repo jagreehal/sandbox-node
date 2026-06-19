@@ -78,9 +78,17 @@ function formatRiskPackage(hint: RiskHint): string {
   return `${hint.package}${hint.version ? `@${hint.version}` : ''}`;
 }
 
-function riskDetailLine(hint: RiskHint): string {
+function riskDetailLine(hint: RiskHint, pm: PackageManager | undefined): string {
   if (hint.code === 'bin_exposed') return `adds bin: ${hint.detail.bin}`;
-  if (hint.code === 'recent_version') return hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
+  if (hint.code === 'recent_version') {
+    const head = hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
+    const aged = hint.detail.aged;
+    if (!aged) return head;
+    // Offer the newest release that already predates the worm window. Framed as age, never "safe":
+    // an older version is more battle-tested, not certified clean. Read-only suggestion, no auto-swap.
+    const pin = pm ? `: sandbox ${pm} add ${hint.package}@${aged.version}` : '';
+    return `${head}\n    ↳ ${aged.version} predates the worm window (published ${humanAge(aged.ageMs)})${pin}`;
+  }
   // High-signal codes (typosquat, provenance regression, maintainer takeover, expired domain) are
   // error-level — flag them with the same `!!` emphasis as a very-fresh version.
   return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
@@ -92,30 +100,47 @@ function riskDetailLine(hint: RiskHint): string {
  * (true) is about to run inside the box, so a clean check stays out of the way at `debug`; an
  * explicit `check` (false) confirms it looked, since that's the whole reason it was run.
  */
-export function planRiskHintLog(targetCount: number, allHints: RiskHint[], { contained }: { contained: boolean }): RiskLogLine[] {
+export function planRiskHintLog(targetCount: number, allHints: RiskHint[], { contained, pm }: { contained: boolean; pm?: PackageManager }): RiskLogLine[] {
   const out: RiskLogLine[] = [];
   const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
   const checked = targetCount ? `checked ${targetCount} package${targetCount === 1 ? '' : 's'} for registry risk hints` : undefined;
-  if (!hints.length) {
+  // A bin is the boundary doing its job (a CLI installs its CLI), not a finding to weigh. It never
+  // counts toward the headline, and a package whose ONLY signal is a bin stays silent (debug below).
+  // So "N things worth a look" reflects real signals, not routine tooling. (--json still carries every
+  // hint, bins included.)
+  const headlineCount = hints.filter((h) => h.code !== 'bin_exposed').length;
+  if (!headlineCount) {
     if (checked) out.push({ level: contained ? 'debug' : 'info', text: checked });
     return out;
   }
   if (checked) out.push({ level: 'info', text: checked });
-  out.push({ level: 'warn', text: `${hints.length} thing${hints.length === 1 ? '' : 's'} worth a look before installing` });
+  out.push({ level: 'warn', text: `${headlineCount} thing${headlineCount === 1 ? '' : 's'} worth a look before installing` });
   const grouped = new Map<string, RiskHint[]>();
   for (const hint of hints) {
     const key = formatRiskPackage(hint);
     grouped.set(key, [...(grouped.get(key) ?? []), hint]);
   }
-  for (const [pkg, pkgHints] of grouped) {
-    const level: LogLevel = pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
-    out.push({ level, text: [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint)}`)].join('\n') });
+  // Lead with the worst. Error-level packages (typosquat, provenance drop, malware-window publish)
+  // sort above warn-only ones, the same worst-first contract logAdvisoryHits already honours, so the
+  // ✖ block can't land buried mid-list. A package whose only signal is a bin has no real finding, so
+  // it sinks to debug (silent in the normal report). Array.sort is stable, so same-band packages keep
+  // generation order (typosquat → provenance → maintainer → …).
+  const rank = (level: LogLevel) => (level === 'error' ? 0 : level === 'warn' ? 1 : 2);
+  const ordered = [...grouped.entries()]
+    .map(([pkg, pkgHints]) => {
+      const real = pkgHints.some((hint) => hint.code !== 'bin_exposed');
+      const level: LogLevel = !real ? 'debug' : pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
+      return { pkg, pkgHints, level };
+    })
+    .sort((a, b) => rank(a.level) - rank(b.level));
+  for (const { pkg, pkgHints, level } of ordered) {
+    out.push({ level, text: [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint, pm)}`)].join('\n') });
   }
   // One plain "why this is fine" line, instead of repeating "still contained" on every hint above.
   out.push({
     level: 'info',
     text: contained
-      ? "heads-up only, the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing."
+      ? "heads-up only, the gates passed and this install is about to continue. Want the real boundary too? Retry with explicit `sandbox <pm>` or use a devcontainer."
       : "heads-up only, this was a check, so nothing was installed or downloaded. Run the install when you're ready.",
   });
   return out;
@@ -154,6 +179,9 @@ interface Packument {
 interface RecentVersionDetail {
   publishedAt: string;
   severity: 'strong' | 'light';
+  /** Newest stable release that already predates the worm window — the honest "an older, more
+   * battle-tested version exists" suggestion. Age, not safety. Omitted when nothing older qualifies. */
+  aged?: { version: string; ageMs: number };
 }
 
 export interface ResolvedTarget {
@@ -230,7 +258,7 @@ function splitScopedName(raw: string): { name: string; spec: string } | undefine
   return isUnsupportedSpec(parsed.spec) ? undefined : parsed;
 }
 
-function splitNameAndSpec(raw: string): { name: string; spec: string } | undefined {
+export function splitNameAndSpec(raw: string): { name: string; spec: string } | undefined {
   if (!raw) return undefined;
   if (raw.startsWith('.') || raw.startsWith('/') || raw.startsWith('file:') || raw.startsWith('link:') || raw.startsWith('workspace:')) return undefined;
   if (/^(?:git\+|https?:)/.test(raw)) return undefined;
@@ -1228,13 +1256,17 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
     if (pkg.publishedAt) {
       const age = now.getTime() - pkg.publishedAt.getTime();
       if (age >= 0 && age < RECENT_VERSION_LIGHT_MS) {
+        // Newest release that already predates the worm window, computed from the packument we already
+        // hold (no extra fetch). Dropped when it would just point back at the flagged version itself.
+        const olderRelease = selectAgedVersion(pkg.packument, RECENT_VERSION_LIGHT_MS, now);
+        const aged = olderRelease && olderRelease.version !== pkg.version ? { version: olderRelease.version, ageMs: olderRelease.ageMs } : undefined;
         hints.push({
           level: age < RECENT_VERSION_STRONG_MS ? 'error' : 'warn',
           code: 'recent_version',
           package: pkg.name,
           version: pkg.version,
           message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)}; fresh releases are the supply-chain worm window`,
-          detail: { publishedAt: pkg.publishedAt.toISOString(), severity: age < RECENT_VERSION_STRONG_MS ? 'strong' : 'light' } satisfies RecentVersionDetail,
+          detail: { publishedAt: pkg.publishedAt.toISOString(), severity: age < RECENT_VERSION_STRONG_MS ? 'strong' : 'light', aged } satisfies RecentVersionDetail,
         });
       }
     }
@@ -1284,19 +1316,11 @@ export interface AgedVersion {
 }
 
 /**
- * The newest stable (non-prerelease, non-deprecated) version of `name` that has already aged past
- * `minAgeMs` — the concrete "pin a known-good older version" answer when the release-age gate blocks
- * the latest. Returns undefined when the registry is unreachable (fail open) or nothing qualifies.
+ * Pure: newest stable (non-prerelease, non-deprecated) version in an already-fetched packument that
+ * has aged past `minAgeMs`. The selection behind both the release-age pin suggestion and the
+ * freshness hint's "an older release predates the window" line. Age is the only claim — never "safe".
  */
-export async function suggestAgedVersion(name: string, minAgeMs: number, opts: { client?: RegistryClient; now?: Date } = {}): Promise<AgedVersion | undefined> {
-  const client = opts.client ?? createRegistryClient();
-  const now = opts.now ?? new Date();
-  let packument: Packument;
-  try {
-    packument = await client.getPackument(name);
-  } catch {
-    return undefined; // fail open — no suggestion rather than a hard error on the block path
-  }
+export function selectAgedVersion(packument: Packument, minAgeMs: number, now: Date): AgedVersion | undefined {
   const time = packument.time ?? {};
   const aged = Object.entries(packument.versions)
     .map(([version, manifest]) => ({ version, manifest, parsed: parseSemver(version), publishedAt: parseDate(time[version]) }))
@@ -1304,6 +1328,21 @@ export async function suggestAgedVersion(name: string, minAgeMs: number, opts: {
     .sort((a, b) => compareSemver(a.parsed, b.parsed));
   const best = aged.at(-1);
   return best ? { version: best.version, publishedAt: best.publishedAt, ageMs: now.getTime() - best.publishedAt.getTime() } : undefined;
+}
+
+/**
+ * The newest stable version of `name` already aged past `minAgeMs` — the concrete "pin an older
+ * version" answer when the release-age gate blocks the latest. Fetches the packument, then defers to
+ * {@link selectAgedVersion}. Returns undefined when the registry is unreachable (fail open) or nothing qualifies.
+ */
+export async function suggestAgedVersion(name: string, minAgeMs: number, opts: { client?: RegistryClient; now?: Date } = {}): Promise<AgedVersion | undefined> {
+  const client = opts.client ?? createRegistryClient();
+  const now = opts.now ?? new Date();
+  try {
+    return selectAgedVersion(await client.getPackument(name), minAgeMs, now);
+  } catch {
+    return undefined; // fail open — no suggestion rather than a hard error on the block path
+  }
 }
 
 /** A package whose to-be-installed version is younger than the release-age threshold. */

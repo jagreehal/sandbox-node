@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderRunArgs } from '../src/backend.js';
 import { SandboxConfigSchema } from '../src/config.js';
+import { BAKED_YARN_DLX } from '../src/image.js';
 import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRemove, planRun, planUpdate, type Mount } from '../src/plan.js';
 import type { ProjectFacts } from '../src/project.js';
 
@@ -63,6 +64,12 @@ describe('warm cache volume', () => {
     expect(find(planRun(cfg(), facts(), ['npx', 'cowsay']).mounts, '/root/.npm')?.source).toBe('sandbox-cache-npm');
     expect(find(planRun(cfg(), facts(), ['bunx', 'cowsay']).mounts, '/root/.bun/install/cache')?.source).toBe('sandbox-cache-bun');
     expect(find(planRun(cfg(), facts(), ['pnpm', 'dlx', 'cowsay']).mounts, '/root/.local/share/pnpm/store')?.source).toBe('sandbox-cache-pnpm');
+  });
+
+  it('normalizes lockfile-only `yarn dlx` to the baked Berry runtime so it needs no run-time manager download', () => {
+    const plan = planRun(cfg(), facts({ pm: 'yarn', isYarnBerry: false }), ['yarn', 'dlx', 'cowsay']);
+    expect(plan.argv).toEqual(['corepack', `yarn@${BAKED_YARN_DLX}`, 'dlx', 'cowsay']);
+    expect(find(plan.mounts, '/root/.cache/yarn')?.source).toBe('sandbox-cache-yarn');
   });
 
   it('does NOT mount a cache for plain run commands that download nothing', () => {

@@ -58,6 +58,7 @@ Pick by what you're gating:
 - **`delta` for PRs, `check`/`preflight` for genuinely-new packages, `scan` for cron.** Using a full `check` as a PR gate on an active project produces release-age noise on already-vetted deps; reach for `delta`.
 - **No Docker needed** for any command here — they query the registry/OSV and read files. Don't add a container step.
 - **Tighten with the same flags as install:** `--min-release-age <days>`, `--fail-on-advisory`, `--fail-on-risk`. The `strict` preset sets sensible CI defaults (`sandbox init --preset strict`).
+- **When a CI step runs the real install in the container** (e.g. `sandbox npm ci`), add `--fail-on-source-writes` (config `install.failOnSourceWrites`, on in `strict`): it fails the job if the install edited your source tree outside deps/lockfiles. The edit still happened (the tree is writable) — this is a detect-and-fail tripwire, and the changed files are also in the audit log as an `install.source-write` event. Unlike the gates above, this one needs the container.
 - **A non-malware advisory never changes the exit code** (same as the install path) — there's no "block on any advisory" flag. Say so plainly rather than implying one exists.
 - **`verify` is about the committed boundary, not a live run** — it's how you stop a PR from quietly loosening containment for the whole team.
 

@@ -6,6 +6,7 @@ import { SandboxConfigSchema } from '../src/config.js';
 import {
   BAKED_COREPACK,
   DEFAULT_BASE_IMAGE,
+  bundledImageMaterial,
   corepackPrepareStep,
   customDockerfileWarnings,
   derivedDockerfile,
@@ -115,6 +116,19 @@ describe('specFingerprint', () => {
     const before = specFingerprint(spec({ customDockerfileUnsafe: file }));
     writeFileSync(file, 'FROM node:24\nRUN echo changed\n');
     expect(specFingerprint(spec({ customDockerfileUnsafe: file }))).not.toBe(before);
+  });
+});
+
+describe('bundledImageMaterial', () => {
+  it('changes when the bundled Dockerfile recipe changes', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-bundled-'));
+    const dockerfile = path.join(dir, 'Dockerfile');
+    const guard = path.join(dir, 'net-guard.sh');
+    writeFileSync(dockerfile, 'FROM node:24\n');
+    writeFileSync(guard, '#!/bin/sh\necho guard\n');
+    const before = bundledImageMaterial(dir);
+    writeFileSync(dockerfile, 'FROM node:24\nRUN echo changed\n');
+    expect(bundledImageMaterial(dir)).not.toBe(before);
   });
 });
 
