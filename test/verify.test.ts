@@ -91,7 +91,7 @@ describe('signVerifyReceipt', () => {
   });
 });
 
-describe('runKeygen / runAuditVerify (extracted CLI handlers — now unit-testable)', () => {
+describe('runKeygen / runAuditVerify (extracted CLI handlers, now unit-testable)', () => {
   it('runKeygen --json prints a usable keypair', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {

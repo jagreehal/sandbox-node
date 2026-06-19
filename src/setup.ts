@@ -34,8 +34,8 @@ export function backendStartHint(backend: 'docker' | 'podman'): string {
  */
 export function backendDownGuidance(probe: { installed: boolean; daemonUp: boolean }, backend: 'docker' | 'podman'): string[] | undefined {
   const rerun = 'then re-run, or check your setup with:  sandbox doctor';
-  if (!probe.installed) return [`${backend} isn't installed (or not on your PATH) — that's why this couldn't run`, `install it:  ${backendInstallHint(backend)}`, rerun];
-  if (!probe.daemonUp) return [`the ${backend} daemon isn't running — that's why this couldn't run`, `start it:  ${backendStartHint(backend)}`, rerun];
+  if (!probe.installed) return [`${backend} isn't installed (or not on your PATH), that's why this couldn't run`, `install it:  ${backendInstallHint(backend)}`, rerun];
+  if (!probe.daemonUp) return [`the ${backend} daemon isn't running, that's why this couldn't run`, `start it:  ${backendStartHint(backend)}`, rerun];
   return undefined;
 }
 
@@ -62,7 +62,7 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
       console.log(`sandbox: wrote ${path.relative(cwd, agentFile)} (paste into your agent's project instructions)`);
       console.log(`sandbox: wrote ${path.relative(cwd, hook.script)}`);
       if (hook.wired) {
-        console.log(`sandbox: wired ${path.relative(cwd, hook.settings)} — a PreToolUse hook blocks bare npm/pnpm/yarn/bun/npx, and .env/secrets are denied to the agent`);
+        console.log(`sandbox: wired ${path.relative(cwd, hook.settings)}, a PreToolUse hook blocks bare npm/pnpm/yarn/bun/npx, and .env/secrets are denied to the agent`);
       } else {
         printUnwiredHookWarning(path.relative(cwd, hook.settings));
       }
@@ -125,7 +125,7 @@ async function offerPathWiring(): Promise<void> {
 
   if (file && existsSync(file) && blockState(readFileSync(file, 'utf8')) === 'current') {
     console.log('');
-    console.log(`sandbox: shell wrappers already active in ${path.basename(file)} — bare npm/pnpm/yarn/bun install route through sandbox`);
+    console.log(`sandbox: shell wrappers already active in ${path.basename(file)}, bare npm/pnpm/yarn/bun install route through sandbox`);
     return;
   }
 
@@ -133,7 +133,7 @@ async function offerPathWiring(): Promise<void> {
   if (file && process.stdout.isTTY) {
     const ok = await confirm({ message: `Route bare npm/pnpm/yarn/bun install through sandbox automatically? (edits ~/${path.basename(file)})` });
     if (isCancel(ok) || !ok) {
-      console.log('sandbox: skipped — wire it any time with `sandbox path install` (undo: `sandbox path uninstall`)');
+      console.log('sandbox: skipped, wire it any time with `sandbox path install` (undo: `sandbox path uninstall`)');
       return;
     }
     for (const m of installPath({ shell }).messages) console.log(m);

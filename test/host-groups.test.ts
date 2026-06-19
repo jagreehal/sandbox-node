@@ -10,7 +10,7 @@ describe('HOST_GROUPS', () => {
     }
   });
 
-  it('cloud groups are scoped to control-plane hosts — NO blanket object-storage wildcards', () => {
+  it('cloud groups are scoped to control-plane hosts, NO blanket object-storage wildcards', () => {
     const cloudHosts = HOST_GROUPS.filter((g) => g.name !== 'build-tools').flatMap((g) => g.hosts);
     // the exfil-sink wildcards we deliberately refuse to bundle
     expect(cloudHosts).not.toContain('amazonaws.com');

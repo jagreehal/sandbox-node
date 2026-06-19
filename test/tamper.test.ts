@@ -105,7 +105,7 @@ describe('containedSuccessLine', () => {
     expect(containedSuccessLine(0, ['node', 'server.js'])).toBeUndefined();
   });
 
-  it('stays quiet when the install failed — a non-zero exit says its own thing', () => {
+  it('stays quiet when the install failed, a non-zero exit says its own thing', () => {
     expect(containedSuccessLine(1, ['npm', 'install'])).toBeUndefined();
   });
 })

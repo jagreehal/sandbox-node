@@ -64,7 +64,7 @@ export function ensureLocalConfigIgnored(cwd: string): boolean {
   const body = existsSync(file) ? readFileSync(file, 'utf8') : '';
   if (body.split(/\r?\n/).some((line) => line.trim() === LOCAL_CONFIG_NAME)) return false;
   const sep = body === '' || body.endsWith('\n') ? '' : '\n';
-  writeFileSync(file, `${body}${sep}# personal sandbox overrides — do not commit\n${LOCAL_CONFIG_NAME}\n`);
+  writeFileSync(file, `${body}${sep}# personal sandbox overrides, do not commit\n${LOCAL_CONFIG_NAME}\n`);
   return true;
 }
 
@@ -98,10 +98,10 @@ export function initNextCommands(preset: PresetName): string[] {
 /** Post-init tips, one string per tip. Preflight + path apply to every preset; agent adds one. */
 export function initTips(preset: PresetName): string[] {
   const tips = [
-    'review before installing — sandbox preflight npm install runs the gates without installing',
-    'stop typing the prefix — sandbox path install routes bare npm/pnpm/yarn/bun install through sandbox in your shell',
+    'review before installing, sandbox preflight npm install runs the gates without installing',
+    'stop typing the prefix, sandbox path install routes bare npm/pnpm/yarn/bun install through sandbox in your shell',
   ];
-  if (preset === 'agent') tips.push('full agent isolation (editor + agent in the jail) — sandbox devcontainer init');
+  if (preset === 'agent') tips.push('full agent isolation (editor + agent in the jail), sandbox devcontainer init');
   return tips;
 }
 
@@ -122,7 +122,7 @@ export function printInitSummary(preset: PresetName, configFile: string, agent?:
     console.log(`sandbox: wrote ${rel(agent.agentFile)} (paste into Claude/Cursor/Codex project instructions)`);
     console.log(`sandbox: wrote ${rel(agent.hook.script)}`);
     if (agent.hook.wired) {
-      console.log(`sandbox: wired ${rel(agent.hook.settings)} — a PreToolUse hook blocks bare npm/pnpm/yarn/bun/npx, and .env/secrets are denied to the agent`);
+      console.log(`sandbox: wired ${rel(agent.hook.settings)}, a PreToolUse hook blocks bare npm/pnpm/yarn/bun/npx, and .env/secrets are denied to the agent`);
     } else {
       printUnwiredHookWarning(rel(agent.hook.settings));
     }
@@ -167,7 +167,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
   // --force to overwrite. Keeps `sandbox init` from failing in CI / agent shells.
   if (!process.stdout.isTTY) {
     const fallback: PresetName = 'balanced';
-    console.log(`sandbox: no TTY and no --preset given — using the '${fallback}' preset (safe default).`);
+    console.log(`sandbox: no TTY and no --preset given, using the '${fallback}' preset (safe default).`);
     console.log(`sandbox: re-run with --preset ${PRESET_NAMES.join('|')} to choose a different one.`);
     return runInit(cwd, { ...opts, preset: fallback });
   }
@@ -203,7 +203,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
     options: [
       { value: 'none', label: 'None' },
       { value: 'project', label: 'Project (./.claude-sandbox)' },
-      { value: 'home', label: 'Home (~/.claude) — leaky' },
+      { value: 'home', label: 'Home (~/.claude), leaky' },
     ],
     initialValue: config.grants.claude,
   });
@@ -213,7 +213,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
   // Opt-in egress bundles. Default-deny stays the default — nothing is preselected; the user
   // deliberately widens to a curated, labelled group (or none) instead of allowing hosts blind.
   const groups = await p.multiselect({
-    message: 'Pre-allow any common egress bundles? (default-deny otherwise — you can always add more later)',
+    message: 'Pre-allow any common egress bundles? (default-deny otherwise, you can always add more later)',
     options: HOST_GROUPS.map((g) => ({ value: g.name, label: g.label, hint: g.why })),
     required: false,
     initialValues: [] as string[],
@@ -226,7 +226,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
   const agent = preset === 'agent' ? writeAgentArtifacts(cwd) : undefined;
   p.outro(`Wrote sandbox.config.json (${preset})`);
   printInitSummary(preset, configFile, agent, addedHosts);
-  if (groupHosts.length) console.log(`sandbox: added ${groups.join(', ')} group(s) to egress.allow — ${groupHosts.join(', ')}`);
+  if (groupHosts.length) console.log(`sandbox: added ${groups.join(', ')} group(s) to egress.allow: ${groupHosts.join(', ')}`);
   return 0;
 }
 

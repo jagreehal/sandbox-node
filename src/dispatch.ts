@@ -37,7 +37,7 @@ const UPDATE_VERBS: Record<PackageManager, Set<string>> = {
 
 /**
  * `dedupe` reorganises the installed tree to share versions. It re-resolves against the registry to
- * find dedupable versions, so it's install-class (registry egress) — a no-network `run` can't do it.
+ * find dedupable versions, so it's install-class (registry egress), a no-network `run` can't do it.
  * It rides the `update` model (it can pull newer in-range versions, same as an update). bun has no
  * dedupe; yarn's lives in Berry. npm also spells it `ddp`.
  */

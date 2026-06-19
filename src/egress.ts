@@ -18,7 +18,7 @@ export class EgressError extends Error {
 async function step(bin: string, args: string[], what: string): Promise<void> {
   const { code, stderr } = await capture(bin, args);
   if (code !== 0) {
-    throw new EgressError(`egress: ${what} failed — ${bin} ${args.join(' ')}\n${stderr.trim() || `exit ${code}`}`);
+    throw new EgressError(`egress: ${what} failed, ${bin} ${args.join(' ')}\n${stderr.trim() || `exit ${code}`}`);
   }
 }
 

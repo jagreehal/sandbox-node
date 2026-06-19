@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildHostSuffixes, classifyHost, describeBlockedHosts, renderBlockedHostLines } from '../src/hosts.js';
 
 describe('buildHostSuffixes', () => {
-  it('is the native-build/cdn/git curated set — binaries & sources, never registries', () => {
+  it('is the native-build/cdn/git curated set, binaries & sources, never registries', () => {
     const hosts = buildHostSuffixes();
     expect(hosts).toContain('nodejs.org'); // node-gyp headers
     expect(hosts).toContain('github.com'); // release binaries

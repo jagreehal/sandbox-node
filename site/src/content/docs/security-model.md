@@ -1,9 +1,9 @@
 ---
 title: What's protected
-description: The honest security gradient — what sandbox protects by default, what it deliberately doesn't, and how to lock down the rest.
+description: What sandbox protects by default, what it leaves writable, and how to lock down the rest.
 ---
 
-The whole sale is trust, so here's the line in plain sight. sandbox blocks credential theft, persistence, and exfiltration. It does not stop a dependency from editing your source tree during an install. Knowing which is which is the point.
+The whole sale is trust, so the line stays in plain sight. sandbox blocks credential theft, persistence, and exfiltration. It does not stop a dependency from editing your source tree during an install. Knowing which is which is the point.
 
 ## Protected by default
 
@@ -21,7 +21,7 @@ Package managers need a writable project root, so a malicious dependency can ove
 | What | How to lock it down |
 | --- | --- |
 | Your **source files** | `--frozen` makes the whole tree read-only (npm, yarn, bun; pnpm keeps a writable root). Review `git diff` after installing from an untrusted source. |
-| Anything you **grant** | ssh-agent, paths, env vars, network — grant the minimum; prefer ssh-agent over mounting key files. |
+| Anything you **grant** | ssh-agent, paths, env vars, network. Grant the minimum; prefer ssh-agent over mounting key files. |
 | **Network in `run` / `shell`** | `run.network` defaults to `none`; widen deliberately with `--dev`. |
 
 We'd rather state this than imply a guarantee the tool can't keep.
@@ -42,4 +42,4 @@ Tighten any run on the fly with `--min-release-age <days>`, `--fail-on-advisory`
 
 ## Verify the boundary is real
 
-A boundary that isn't committed, or that a personal override has loosened, isn't a boundary. `sandbox verify` fails unless the repo commits a genuine, un-loosened sandbox boundary — the gate behind the "sandboxed" badge. See [Gate dependencies in CI](/sandbox-node/ci/).
+A boundary that isn't committed, or that a personal override has loosened, isn't a boundary. `sandbox verify` fails unless the repo commits a genuine, un-loosened sandbox boundary. It's the gate behind the "sandboxed" badge. See [Gate dependencies in CI](/sandbox-node/ci/).

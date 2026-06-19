@@ -1,6 +1,6 @@
 ---
 name: sandbox-install
-description: Human-in-the-loop secure install for npm/pnpm/yarn/bun deps, driven by the `sandbox` CLI (@jagreehal/sandbox-node). Runs a read-only `check` review pass (npq-style, no Docker) that reports supply-chain risk WITHOUT installing, surfaces each finding with a recommended action (including a concrete older version to pin), lets the user choose, then runs the real install with the matching flags. Use when the user wants to install, add, remove, or update dependencies safely, vet a package before installing, review supply-chain risk (fresh releases, OSV advisories, known malware), or asks to "sandbox install" / "check this package".
+description: Human-in-the-loop secure install for npm/pnpm/yarn/bun deps, driven by the `sandbox` CLI (@jagreehal/sandbox-node). Runs a read-only `check` review pass (no Docker) that reports supply-chain risk WITHOUT installing, surfaces each finding with a recommended action (including a concrete older version to pin), lets the user choose, then runs the real install with the matching flags. Use when the user wants to install, add, remove, or update dependencies safely, vet a package before installing, review supply-chain risk (fresh releases, OSV advisories, known malware), or asks to "sandbox install" / "check this package".
 ---
 
 # sandbox-install
@@ -133,4 +133,3 @@ See [REFERENCE.md](REFERENCE.md) for the full flag list and finding formats.
 
 - **sandbox-agent-isolation** — contain the *agent* that runs installs (host PreToolUse hook via `sandbox init --agent`, or run the whole session inside a `sandbox devcontainer`).
 - **sandbox-ci** — the read-only, no-Docker CI/cron gates: `verify`, `delta` (gate only a PR's dependency changes), `scan` (retroactive malware sweep), `secrets`.
-

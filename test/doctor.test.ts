@@ -35,7 +35,7 @@ describe('autoFixActions', () => {
 describe('doctorExitCode', () => {
   it('is 0 when only ok/info checks are present (e.g. a missing config file uses defaults)', () => {
     const checks: Check[] = [
-      { level: 'info', label: 'config', detail: 'no config file — using defaults' },
+      { level: 'info', label: 'config', detail: 'no config file, using defaults' },
       ok('backend'),
       ok('daemon'),
       { level: 'info', label: 'image', detail: 'will build on first use', autoFix: 'build' },
@@ -57,7 +57,7 @@ describe('doctorSummary', () => {
 
   it('counts failures and points back at the report', () => {
     expect(doctorSummary([ok('config'), { level: 'fail', label: 'daemon', detail: 'down' }])).toBe(
-      '[fail] 1 check needs attention — fix the above, then rerun: sandbox doctor',
+      '[fail] 1 check needs attention, fix the above, then rerun: sandbox doctor',
     );
     expect(doctorSummary([{ level: 'fail', label: 'backend', detail: 'x' }, { level: 'fail', label: 'daemon', detail: 'y' }])).toContain('2 checks need attention');
   });

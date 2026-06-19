@@ -1,11 +1,11 @@
 ---
 title: Commands
-description: The sandbox command surface — the passthrough you already know, plus the sandbox-only commands for setup, vetting, and CI.
+description: The sandbox command surface. The passthrough you already know, plus the sandbox-only commands for setup, vetting, and CI.
 ---
 
 The first rule: **put `sandbox` in front of what you'd type anyway.** Everything below the passthrough table is sugar or a sandbox-only command.
 
-## Passthrough — your package manager, contained
+## Passthrough: your package manager, contained
 
 sandbox auto-detects npm, pnpm, yarn, or bun and runs the command verbatim inside the box.
 
@@ -52,12 +52,12 @@ sandbox script build      # run a script whose name collides with a sandbox comm
 
 Put these before the command (`sandbox --frozen npm install`):
 
-- `--frozen` — reproducible install; read-only source tree (every PM except pnpm).
-- `--min-release-age <days>` — block versions published fewer than N days ago.
-- `--fail-on-advisory` — block when a version is flagged as malware.
-- `--fail-on-risk` — exit non-zero on any risk hint.
-- `--allow-build-hosts` — widen egress to the curated native-build hosts for this run.
-- `--dry-run` — print the resolved plan (mounts, network, grants) without running anything.
-- `--json` — machine-readable output.
+- `--frozen`: reproducible install; read-only source tree (every PM except pnpm).
+- `--min-release-age <days>`: block versions published fewer than N days ago.
+- `--fail-on-advisory`: block when a version is flagged as malware.
+- `--fail-on-risk`: exit non-zero on any risk hint.
+- `--allow-build-hosts`: widen egress to the curated native-build hosts for this run.
+- `--dry-run`: print the resolved plan (mounts, network, grants) without running anything.
+- `--json`: machine-readable output.
 
 Run `sandbox help` for the complete surface.

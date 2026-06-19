@@ -6,16 +6,16 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 const protectedList = [
   ['Credentials', 'No ~/.ssh, ~/.npmrc, ~/.aws, or home dir reaches the container.'],
-  ['Persistence', '.git, .github, .husky, .claude, … and package.json are read-only — an install can’t plant auto-running hooks.'],
+  ['Persistence', '.git, .github, .husky, .claude, … and package.json are read-only, so an install can’t plant auto-running hooks.'],
   ['Egress', 'Default-deny. The install reaches only the registry hosts you allow.'],
   ['Capabilities', '--cap-drop ALL, no-new-privileges, container-root ≠ host-root.'],
 ];
 const notProtected = [
   ['Your source tree', 'Package managers need a writable root, so a malicious dep can still edit src/ during install. Use --frozen for a read-only tree, and review git diff.'],
-  ['Anything you grant', 'ssh-agent, paths, env, network — grant the minimum; prefer ssh-agent over key files.'],
+  ['Anything you grant', 'ssh-agent, paths, env, network. Grant the minimum; prefer ssh-agent over key files.'],
 ];
 const workflows = [
-  ['Vet a package before installing', 'check', 'A read-only review pass (npq-style, no Docker): OSV advisories, typosquats, fresh/deprecated versions — before a byte is fetched.', `${base}/vetting/`],
+  ['Vet a package before installing', 'check', 'A read-only review pass (no Docker): OSV advisories, typosquats, fresh/deprecated versions, all before a byte is fetched.', `${base}/vetting/`],
   ['Gate dependencies in CI', 'ci', 'verify the boundary is committed, delta to gate only a PR’s dependency changes, scan for newly-flagged malware, secrets for committed credentials.', `${base}/ci/`],
   ['Isolate a coding agent', 'agent', 'A PreToolUse hook that blocks bare npm/npx on the host, or a generated devcontainer that runs the whole session inside the jail.', `${base}/agent-isolation/`],
 ];
@@ -24,7 +24,7 @@ const workflows = [
 <section class="band">
   <h2 class="band__title">Add one word. Keep your workflow.</h2>
   <p class="band__lede">
-    sandbox auto-detects your package manager and mirrors it — install, add, update, audit fix,
+    sandbox auto-detects your package manager and mirrors it: install, add, update, audit fix,
     one-off tools. Anything that pulls <em>new</em> versions runs through the same supply-chain gates
     (release-age cooldown, OSV malware check, risk hints) before the bytes are fetched.
   </p>
@@ -37,7 +37,7 @@ const workflows = [
 
 <section class="band">
   <h2 class="band__title">Honest about the boundary</h2>
-  <p class="band__lede">The whole sale is trust, so the line is drawn in plain sight — what’s protected, and what isn’t.</p>
+  <p class="band__lede">The whole sale is trust, so the line stays in plain sight: what sandbox protects, and what stays writable.</p>
   <div class="panels">
     <div class="panel panel--yes">
       <p class="panel__head"><span class="panel__mark">✓</span> Protected by default</p>
@@ -50,7 +50,7 @@ const workflows = [
       <dl>
         {notProtected.map(([t, d]) => (<><dt>{t}</dt><dd>{d}</dd></>))}
       </dl>
-      <p class="panel__foot">sandbox blocks credential theft, persistence, and exfiltration — not source edits. We’d rather say so than imply otherwise.</p>
+      <p class="panel__foot">sandbox blocks credential theft, persistence, and exfiltration. It leaves source edits to you. We’d rather say so than imply otherwise.</p>
     </div>
   </div>
 </section>
@@ -60,16 +60,16 @@ const workflows = [
   <p class="band__lede">A clean install barely says anything. A finding is specific and tells you exactly what to do. Real output:</p>
   <div class="shots">
     <pre class="shot"><code><span class="c-dim">$ sandbox pnpm add zod</span>
-<span class="c-ok">✓ done — ran in a throwaway sandbox, now deleted;</span>
+<span class="c-ok">✓ done, ran in a throwaway sandbox, now deleted;</span>
 <span class="c-ok">  it never had your credentials or home dir</span></code></pre>
     <pre class="shot"><code><span class="c-ochre">sandbox: 1 thing worth a look before installing</span>
 <span class="c-ochre">  left-pad@99.0.0</span>
 <span class="c-dim">  !! very recently published 2 hours ago</span>
-<span class="c-dim">heads-up only — the install runs in a throwaway</span>
+<span class="c-dim">heads-up only, the install runs in a throwaway</span>
 <span class="c-dim">container. Continuing.</span></code></pre>
     <pre class="shot"><code><span class="c-dim">sandbox blocked 1 request to a host not on your</span>
 <span class="c-dim">allowlist:</span>
-<span class="c-ochre">  ⚠ telemetry.example.com — not a known registry</span>
+<span class="c-ochre">  ⚠ telemetry.example.com, not a known registry</span>
 <span class="c-ochre">    or build host</span>
 <span class="c-dim">Allow once · save for the team · cancel?</span></code></pre>
   </div>

@@ -19,7 +19,7 @@ const outside = [
     <p class="hero__lede">
       Put <code>sandbox</code> in front of the <code>npm</code> / <code>pnpm</code> / <code>yarn</code> / <code>bun</code>
       command you already run. Lifecycle scripts execute in a container that can reach your project and the
-      registry — and nothing else. Your laptop secrets stay out of reach.
+      registry, and nothing else. Your laptop secrets stay out of reach.
     </p>
 
     <div class="hero__cmd" role="img" aria-label="sandbox npm install">
@@ -44,7 +44,7 @@ const outside = [
         <pre class="term__body"><code><span class="l"><span class="c-prompt">$</span> sandbox npm install</span>
 <span class="l c-dim">sandbox: npm install → sandboxed</span>
 <span class="l c-dim">added 412 packages · postinstall ran here, not on your host</span>
-<span class="l c-ok">✓ done — ran in a throwaway sandbox, now deleted;</span>
+<span class="l c-ok">✓ done, ran in a throwaway sandbox, now deleted;</span>
 <span class="l c-ok">  it never had your credentials or home dir</span></code></pre>
       </div>
       <ul class="boundary__reach">

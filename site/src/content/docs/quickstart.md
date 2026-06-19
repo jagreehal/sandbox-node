@@ -35,7 +35,7 @@ sandbox npm uninstall left-pad
 A clean install ends with one line confirming you were never exposed:
 
 ```
-sandbox: ✓ done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir
+sandbox: ✓ done, ran in a throwaway sandbox, now deleted; it never had your credentials or home dir
 ```
 
 ## Stop typing the prefix
@@ -49,7 +49,7 @@ sandbox path install     # undo any time with: sandbox path uninstall
 This installs shell functions (zsh, bash, fish, pwsh) that send the install-class and fetch-and-run commands through sandbox, and leave read-only commands untouched. Bypass once with `command npm …`, or a whole shell with `SANDBOX_OFF=1`.
 
 :::tip[One-button setup]
-`sandbox setup` writes a config if you don't have one, checks your container runtime, builds the images, and offers to wire the shell wrappers — all in one command. Add `--vibe` for a dev-focused preset or `--agent` to also harden a coding agent.
+`sandbox setup` writes a config if you don't have one, checks your container runtime, builds the images, and offers to wire the shell wrappers, all in one command. Add `--vibe` for a dev-focused preset or `--agent` to also harden a coding agent.
 :::
 
 ## Check your setup any time
@@ -62,6 +62,6 @@ It reports config, package manager, runtime, daemon, and image state, with a one
 
 ## Next
 
-- [How it works](/sandbox-node/how-it-works/) — the boundary, in detail.
-- [What's protected](/sandbox-node/security-model/) — and what isn't.
-- [Commands](/sandbox-node/commands/) — the full surface.
+- [How it works](/sandbox-node/how-it-works/): the boundary in detail.
+- [What's protected](/sandbox-node/security-model/): and the parts that stay writable.
+- [Commands](/sandbox-node/commands/): the full surface.

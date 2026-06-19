@@ -66,7 +66,7 @@ export interface BadgeOptions {
 export function renderBadge(cwd: string, opts: BadgeOptions = {}): string {
   const slug = opts.slug ?? repoSlug(cwd);
   if (opts.workflow) {
-    if (!slug) return 'sandbox: could not detect owner/repo — pass --repo <owner/repo> to emit a verified badge';
+    if (!slug) return 'sandbox: could not detect owner/repo, pass --repo <owner/repo> to emit a verified badge';
     return workflowBadge(slug, opts.workflow);
   }
   return staticBadge(slug);

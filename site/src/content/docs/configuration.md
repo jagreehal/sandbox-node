@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: The sandbox.config.json manifest — presets, egress allowlist, grants, install gates, and the personal local override.
+description: The sandbox.config.json manifest. Presets, egress allowlist, grants, install gates, and the personal local override.
 ---
 
 `sandbox.config.json` lives at your project root and is committed, so the boundary is the same for everyone. Start it with `sandbox init` (interactive) or `sandbox init --preset balanced`. An editor gets autocomplete from the bundled `sandbox.schema.json`.
@@ -39,9 +39,9 @@ Prefer the narrowest fix: one host before the bundle, the bundle before `--full-
 
 Everything host-side is denied unless you grant it. Grant the minimum:
 
-- `ssh-agent: true` — forward your SSH agent so git-over-SSH works in the box. The key bytes never enter the container.
-- `paths` / `env` / `envFiles` — mount specific paths or inject named env vars.
-- `claude` — `none`, `project` (a project-local config dir), or `home` (leaky).
+- `ssh-agent: true` forwards your SSH agent so git-over-SSH works in the box; the key bytes never enter the container.
+- `paths` / `env` / `envFiles` mount specific paths or inject named env vars.
+- `claude`: `none`, `project` (a project-local config dir), or `home` (leaky).
 
 :::tip
 Prefer `ssh-agent` over mounting a key file, and a project-local Claude config over your home one. A grant is a hole in the boundary; make it as small as the job needs.
@@ -51,10 +51,10 @@ Prefer `ssh-agent` over mounting a key file, and a project-local Claude config o
 
 These run before any new version is fetched:
 
-- `minReleaseAgeDays` — block versions published in the last N days. The strongest control against publish-and-detonate worms. The `strict` preset sets 7.
-- `failOnAdvisory` — block versions flagged as malware in OSV.
-- `riskHints` — `off`, `basic` (packument-only), or `thorough` (adds network checks: low downloads, expired maintainer domains).
-- `canaries` — plant fake credentials in the install container and watch the egress proxy; if a planted token leaves the box, the run fails as a caught exfiltration.
+- `minReleaseAgeDays`: block versions published in the last N days, the strongest control against publish-and-detonate worms. The `strict` preset sets 7.
+- `failOnAdvisory`: block versions flagged as malware in OSV.
+- `riskHints`: `off`, `basic` (packument-only), or `thorough` (adds network checks: low downloads, expired maintainer domains).
+- `canaries`: plant fake credentials in the install container and watch the egress proxy; if a planted token leaves the box, the run fails as a caught exfiltration.
 
 Any of these can be overridden per run (`--min-release-age 0`, `--fail-on-advisory`, `--risk thorough`).
 
@@ -68,4 +68,4 @@ Any of these can be overridden per run (`--min-release-age 0`, `--fail-on-adviso
 sandbox --dry-run pnpm add zod
 ```
 
-prints the exact plan — mounts, network mode, allowed hosts, grants, ports — without building or running anything. The fastest way to see what a command would do.
+prints the exact plan (mounts, network mode, allowed hosts, grants, ports) without building or running anything. The fastest way to see what a command would do.

@@ -69,8 +69,8 @@ export function doctorExitCode(checks: Check[]): number {
  */
 export function doctorSummary(checks: Check[]): string {
   const failures = checks.filter((c) => c.level === 'fail').length;
-  if (failures > 0) return `[fail] ${failures} ${failures === 1 ? 'check needs' : 'checks need'} attention — fix the above, then rerun: sandbox doctor`;
-  return "[ok] all clear — you're ready: `sandbox npm install`, then `sandbox dev`";
+  if (failures > 0) return `[fail] ${failures} ${failures === 1 ? 'check needs' : 'checks need'} attention, fix the above, then rerun: sandbox doctor`;
+  return "[ok] all clear, you're ready: `sandbox npm install`, then `sandbox dev`";
 }
 
 export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<number> {
@@ -84,7 +84,7 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
     checks.push({
       level: present ? 'ok' : 'info',
       label: 'config',
-      detail: present ? configFile : `no config file — using defaults (create ${configFile} to customise)`,
+      detail: present ? configFile : `no config file, using defaults (create ${configFile} to customise)`,
     });
   } catch (e) {
     checks.push({
@@ -194,7 +194,7 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
           ? `${image} will build on first use`
           : upToDate
             ? `${image} is present and matches the current config`
-            : `${image} is present but out of date — the next run rebuilds it (config changed since it was built)`,
+            : `${image} is present but out of date, the next run rebuilds it (config changed since it was built)`,
         fixes: present && upToDate ? undefined : [`run \`sandbox build\` to ${present ? 'rebuild' : 'build'} it now`],
         autoFix: present && upToDate ? undefined : 'build',
       });
@@ -232,7 +232,7 @@ export async function runDoctor(cwd: string, opts: DoctorOptions): Promise<numbe
         ? {
             level: 'info',
             label: 'node_modules',
-            detail: `${foreignNative.length} package(s) are built for another platform (e.g. ${foreignNative[0]}) — run project tools with \`sandbox test\`/\`sandbox dev\`, or reinstall on this host for native dev`,
+            detail: `${foreignNative.length} package(s) are built for another platform (e.g. ${foreignNative[0]}), run project tools with \`sandbox test\`/\`sandbox dev\`, or reinstall on this host for native dev`,
             fixes: [`run tests via \`sandbox test\`, or reinstall on the host with \`${pm} install\` for host-native tooling`],
           }
         : { level: 'ok', label: 'node_modules', detail: `native packages match this ${process.platform} host` },

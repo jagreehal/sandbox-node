@@ -62,7 +62,7 @@ export const PRESETS: Record<PresetName, Preset> = {
   trusted: {
     name: 'trusted',
     label: 'Trusted',
-    hint: 'full network + SSH agent + project Claude config — for repos you trust',
+    hint: 'full network + SSH agent + project Claude config, for repos you trust',
     config: {
       install: { network: 'on' },
       run: { network: 'on' },

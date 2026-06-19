@@ -6,5 +6,4 @@ dist/
 *.log
 .DS_Store
 
-# local design context (impeccable) — keep competitive notes out of the public repo
-.impeccable.md
+___*

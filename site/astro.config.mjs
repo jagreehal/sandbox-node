@@ -1,11 +1,15 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import mermaid from 'astro-mermaid';
 
 // GitHub Pages: served at https://jagreehal.github.io/sandbox-node/.
 export default defineConfig({
   site: 'https://jagreehal.github.io',
   base: '/sandbox-node',
   integrations: [
+    // Must come BEFORE starlight so its rehype pass turns ```mermaid blocks into diagrams.
+    // autoTheme tracks Starlight's light/dark toggle.
+    mermaid({ autoTheme: true }),
     starlight({
       title: 'sandbox',
       description:

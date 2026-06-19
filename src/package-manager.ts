@@ -159,7 +159,7 @@ export function pmScriptArgv(pm: PackageManager, script: string, args: string[])
 /**
  * A package manager's own default registry host, when it differs from the public npm registry that
  * is already in the default egress allowlist. Yarn classic (v1) defaults to `registry.yarnpkg.com`
- * (npm's own CDN mirror — same trust class), and that host is NOT in `.npmrc`, so it can't be
+ * (npm's own CDN mirror, same trust class), and that host is NOT in `.npmrc`, so it can't be
  * auto-detected like a private registry; without it a plain `yarn install` is blocked on first run.
  * npm/pnpm/bun all default to `registry.npmjs.org`, already covered. Returns undefined when nothing
  * extra is needed. Other registries (jsr.io, npmmirror) stay opt-in via the prompt / `sandbox allow`.

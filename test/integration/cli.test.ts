@@ -116,7 +116,7 @@ describe('cli (golden, no docker)', () => {
         expect(code).toBe(1);
         expect(stderr).toContain('checked 1 package');
         expect(stderr.match(/sharp@0\.33\.5/g)?.length).toBe(1);
-        expect(stderr).toContain('has postinstall script — contained in sandbox');
+        expect(stderr).toContain('has postinstall script, contained in sandbox');
         expect(stderr).toContain('!! very recently published');
         expect(stderr).toContain('adds bin: sharp -> ./cli.js');
         expect(stderr).toContain('blocking because --fail-on-risk is set');
@@ -174,7 +174,7 @@ describe('cli (golden, no docker)', () => {
         const { code, stderr } = await runCli(dir, ['--fail-on-risk', 'npx', 'sharp@0.33.5'], { SANDBOX_NPM_REGISTRY: url });
         expect(code).toBe(1); // blocked before the container runs
         expect(stderr).toContain('checked 1 package');
-        expect(stderr).toContain('has postinstall script — contained in sandbox');
+        expect(stderr).toContain('has postinstall script, contained in sandbox');
         expect(stderr).toContain('blocking because --fail-on-risk is set');
       },
     );
@@ -203,7 +203,7 @@ describe('cli (golden, no docker)', () => {
     );
   });
 
-  it('`check <pkg>` audits a bare package name npq-style — no install, no backend', async () => {
+  it('`check <pkg>` audits a bare package name directly, no install, no backend', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' });
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     await withRegistry(
@@ -216,7 +216,7 @@ describe('cli (golden, no docker)', () => {
         },
       },
       async (url) => {
-        // Bare name, no `npm install` prefix — the friendly npq form. No --fail-on-advisory needed:
+        // Bare name, no `npm install` prefix — the direct package-name form. No --fail-on-advisory needed:
         // `check` always queries, and --min-release-age makes the age gate block.
         const { code, stderr } = await runCli(dir, ['--min-release-age', '7', 'check', 'left-pad'], { SANDBOX_NPM_REGISTRY: url });
         expect(code).toBe(1);
@@ -342,7 +342,7 @@ describe('cli (golden, no docker)', () => {
       async (url) => {
         const { code, stderr } = await runCli(dir, ['--min-release-age', '7', 'preflight', 'npm', 'install', 'is-odd'], { SANDBOX_NPM_REGISTRY: url });
         expect(code).toBe(0);
-        expect(stderr).toContain('no blocking findings — safe to install');
+        expect(stderr).toContain('no blocking findings, safe to install');
       },
     );
   });
@@ -356,14 +356,14 @@ describe('cli (golden, no docker)', () => {
     },
   };
 
-  it('blocks a maintainer-deprecated version by default — never install an abandoned version', async () => {
+  it('blocks a maintainer-deprecated version by default, never install an abandoned version', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' });
     await withRegistry(deprecatedRegistry, async (url) => {
       // No gate flags: riskHints basic is on by default, so the deprecated gate blocks.
       const { code, stderr } = await runCli(dir, ['npm', 'install', 'old-lib'], { SANDBOX_NPM_REGISTRY: url });
       expect(code).toBe(1); // blocked before the container runs
       expect(stderr).toContain('blocked: a maintainer-deprecated version');
-      expect(stderr).toContain('old-lib@2.0.0 — deprecated: no longer maintained');
+      expect(stderr).toContain('old-lib@2.0.0, deprecated: no longer maintained');
       expect(stderr).toContain('--allow-deprecated');
     });
   });
@@ -407,7 +407,7 @@ describe('cli (golden, no docker)', () => {
       // The local `@me/x: workspace:*` dep is dropped (never resolved against the registry).
       const { code, stderr } = await runCli(dir, ['preflight', 'pnpm', 'install'], { SANDBOX_NPM_REGISTRY: url });
       expect(code).toBe(1);
-      expect(stderr).toContain('old-lib@2.0.0 — deprecated: no longer maintained');
+      expect(stderr).toContain('old-lib@2.0.0, deprecated: no longer maintained');
     });
   });
 
@@ -422,14 +422,14 @@ describe('cli (golden, no docker)', () => {
           name: 'buried-dep',
           'dist-tags': { latest: '1.0.0' },
           time: { created: '2020-01-01T00:00:00.000Z', '1.0.0': '2024-01-01T00:00:00.000Z' },
-          versions: { '1.0.0': { deprecated: 'unmaintained — do not use' } },
+          versions: { '1.0.0': { deprecated: 'unmaintained, do not use' } },
         },
       },
       async (url) => {
         const { code, stderr } = await runCli(dir, ['--deep', 'preflight', 'npm', 'install'], { SANDBOX_NPM_REGISTRY: url });
         expect(code).toBe(1); // a deprecated dep nobody declared directly still blocks under --deep
         expect(stderr).toContain('scanned 1 resolved packages');
-        expect(stderr).toContain('buried-dep@1.0.0 — deprecated: unmaintained — do not use');
+        expect(stderr).toContain('buried-dep@1.0.0, deprecated: unmaintained, do not use');
       },
     );
   });
@@ -467,10 +467,11 @@ describe('cli (golden, no docker)', () => {
     const { code, stdout } = await runCli(dir, ['--json', 'install']);
     expect(code).toBe(0);
     const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
+    expect(plan.image).toMatch(/^node-install-sandbox:/);
+    expect(plan.env.CI).toBe('1');
     expect(plan).toMatchObject({
-      image: 'node-install-sandbox:latest',
       argv: ['npm', 'install'],
-      env: { SANDBOX: '1', CI: '', HOME: '/root' },
+      env: { SANDBOX: '1', HOME: '/root' },
       ports: [],
       workdir: '/workspace',
       network: 'allowlist', // default-deny egress
@@ -717,7 +718,7 @@ describe('cli (golden, no docker)', () => {
     await withRegistry(deprecatedRegistry, async (url) => {
       const { code, stderr } = await runCli(dir, ['npm', 'audit', 'fix'], { SANDBOX_NPM_REGISTRY: url });
       expect(code).toBe(1);
-      expect(stderr).toContain('old-lib@2.0.0 — deprecated: no longer maintained');
+      expect(stderr).toContain('old-lib@2.0.0, deprecated: no longer maintained');
     });
   });
 

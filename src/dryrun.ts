@@ -20,7 +20,7 @@ function networkLine(plan: RunPlan): string {
     case 'on':
       return 'full network (host bridge)';
     case 'allowlist':
-      return `allowlist — reaches only: ${plan.egressAllow.join(', ') || '(none)'}`;
+      return `allowlist, reaches only: ${plan.egressAllow.join(', ') || '(none)'}`;
   }
 }
 
@@ -34,7 +34,7 @@ function shortTarget(target: string): string {
 function buildLine(plan: RunPlan): string | undefined {
   const b = plan.build;
   if (!isCustomBuild(b)) return undefined;
-  if (b.customDockerfile) return `  build     custom Dockerfile: ${b.customDockerfile} — boundary NOT verified by sandbox`;
+  if (b.customDockerfile) return `  build     custom Dockerfile: ${b.customDockerfile}, boundary NOT verified by sandbox`;
   const extras = [
     ...(b.extraPackages.length ? [`+pkgs ${b.extraPackages.join(' ')}`] : []),
     ...(b.extraSteps.length ? [`+${b.extraSteps.length} step${b.extraSteps.length === 1 ? '' : 's'}`] : []),
@@ -44,7 +44,7 @@ function buildLine(plan: RunPlan): string | undefined {
 
 export function renderPlanSummary(plan: RunPlan): string {
   const lines = [
-    'sandbox: dry run — nothing was executed',
+    'sandbox: dry run, nothing was executed',
     `  command   ${plan.argv.join(' ')}`,
     `  image     ${plan.image}`,
     `  workdir   ${plan.workdir}`,
@@ -68,7 +68,7 @@ export function renderPlanSummary(plan: RunPlan): string {
 
   const granted = Object.keys(plan.env).filter((k) => !AMBIENT_ENV.has(k) && plan.env[k] !== '');
   const grants = [...(plan.env.SSH_AUTH_SOCK ? ['ssh-agent (sign only, key bytes stay out)'] : []), ...granted];
-  lines.push(`  grants    ${grants.length ? grants.join(', ') : 'none — host credentials stay out'}`);
+  lines.push(`  grants    ${grants.length ? grants.join(', ') : 'none; host credentials stay out'}`);
   lines.push(`  ports     ${plan.ports.length ? plan.ports.join(', ') : 'none'}`);
   lines.push(`  security  ${plan.capDrop.includes('ALL') ? 'cap-drop ALL · ' : ''}${plan.securityOpt.join(' · ')} · container-root ≠ host-root`);
 

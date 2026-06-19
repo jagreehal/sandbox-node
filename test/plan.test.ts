@@ -231,7 +231,7 @@ describe('planRemove', () => {
     expect(plan.interactive).toBe(false);
   });
 
-  it('uses each package manager’s drop verb — npm `uninstall`, others `remove`', () => {
+  it('uses each package manager’s drop verb, npm `uninstall`, others `remove`', () => {
     expect(planRemove(cfg(), facts({ pm: 'npm' }), ['lodash']).argv).toEqual(['npm', 'uninstall', 'lodash']);
     expect(planRemove(cfg(), facts({ pm: 'yarn' }), ['react']).argv).toEqual(['corepack', 'yarn', 'remove', 'react']);
     expect(planRemove(cfg(), facts({ pm: 'bun' }), ['left-pad']).argv).toEqual(['bun', 'remove', 'left-pad']);

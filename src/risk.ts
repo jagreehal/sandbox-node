@@ -115,8 +115,8 @@ export function planRiskHintLog(targetCount: number, allHints: RiskHint[], { con
   out.push({
     level: 'info',
     text: contained
-      ? "heads-up only — the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing."
-      : "heads-up only — this was a check, so nothing was installed or downloaded. Run the install when you're ready.",
+      ? "heads-up only, the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing."
+      : "heads-up only, this was a check, so nothing was installed or downloaded. Run the install when you're ready.",
   });
   return out;
 }
@@ -698,7 +698,7 @@ function maintainerChangeHint(pkg: ResolvedTarget, now: Date): RiskHint | undefi
         code: 'maintainer_change',
         package: pkg.name,
         version: pkg.version,
-        message: `first release ever by publisher ${publisher} (${humanAge(age)}) — possible account takeover`,
+        message: `first release ever by publisher ${publisher} (${humanAge(age)}); possible account takeover`,
         detail: { kind: 'new_publisher', publisher, firstPublishAgeDays: Math.floor(age / DAY_MS) },
       };
     }
@@ -742,7 +742,7 @@ export interface NsResolver {
 
 /**
  * NS resolver with a hard per-lookup timeout (so a slow resolver can't stall preflight). Defaults
- * to the host's configured DNS servers — it respects split-horizon / corporate DNS and doesn't route
+ * to the host's configured DNS servers, it respects split-horizon / corporate DNS and doesn't route
  * maintainer-domain queries through fixed public resolvers (which would leak that you ran the check
  * to an attacker-chosen authoritative server). Set `SANDBOX_DNS_SERVERS` (comma-separated IPs) to
  * override; an invalid override falls back to the system resolver rather than disabling the signal.
@@ -813,7 +813,7 @@ export async function expiredDomainHints(
         code: 'expired_domain',
         package: pkg.name,
         version: pkg.version,
-        message: `maintainer email domain "${bad}" no longer resolves — can be re-registered for account takeover`,
+        message: `maintainer email domain "${bad}" no longer resolves, can be re-registered for account takeover`,
         detail: { domain: bad },
       });
     }
@@ -866,7 +866,7 @@ export async function lowDownloadHints(
         code: 'low_downloads',
         package: pkg.name,
         version: pkg.version,
-        message: `only ${downloads} downloads last month — very low usage`,
+        message: `only ${downloads} downloads last month; very low usage`,
         detail: { downloads },
       });
     }
@@ -1185,7 +1185,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'typosquat',
         package: pkg.name,
         version: pkg.version,
-        message: `name is within 1–2 edits of popular package${similarTo.length === 1 ? '' : 's'}: ${similarTo.slice(0, 3).join(', ')} — possible typosquat`,
+        message: `name is within 1–2 edits of popular package${similarTo.length === 1 ? '' : 's'}: ${similarTo.slice(0, 3).join(', ')}; possible typosquat`,
         detail: { similarTo },
       });
     }
@@ -1196,7 +1196,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'provenance_regression',
         package: pkg.name,
         version: pkg.version,
-        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it — release-path change`,
+        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it, release-path change`,
         detail: { priorVersion: priorProvenance },
       });
     }
@@ -1209,7 +1209,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'missing_metadata',
         package: pkg.name,
         version: pkg.version,
-        message: `missing ${missing.join(' and ')} metadata — lower-trust package`,
+        message: `missing ${missing.join(' and ')} metadata; lower-trust package`,
         detail: { missing },
       });
     }
@@ -1220,7 +1220,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'install_script',
           package: pkg.name,
           version: pkg.version,
-          message: `has ${script} script — contained in sandbox`,
+          message: `has ${script} script, contained in sandbox`,
           detail: { script },
         });
       }
@@ -1233,7 +1233,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'recent_version',
           package: pkg.name,
           version: pkg.version,
-          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)} — fresh releases are the supply-chain worm window`,
+          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)}; fresh releases are the supply-chain worm window`,
           detail: { publishedAt: pkg.publishedAt.toISOString(), severity: age < RECENT_VERSION_STRONG_MS ? 'strong' : 'light' } satisfies RecentVersionDetail,
         });
       }
@@ -1246,7 +1246,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'new_package',
           package: pkg.name,
           version: pkg.version,
-          message: `first published ${humanAge(age)} — still a young package`,
+          message: `first published ${humanAge(age)}; still a young package`,
           detail: { createdAt: pkg.createdAt.toISOString() },
         });
       }
@@ -1258,7 +1258,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'bin_exposed',
         package: pkg.name,
         version: pkg.version,
-        message: `exposes command-line binary — contained in sandbox`,
+        message: `exposes command-line binary, contained in sandbox`,
         detail: { bin },
       });
     }

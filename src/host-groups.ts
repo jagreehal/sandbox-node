@@ -35,25 +35,25 @@ export const HOST_GROUPS: readonly HostGroup[] = [
   {
     name: 'vercel',
     label: 'Vercel (API)',
-    why: 'the Vercel REST API for the CLI and deploys — api.vercel.com (NOT *.vercel.app)',
+    why: 'the Vercel REST API for the CLI and deploys, api.vercel.com (NOT *.vercel.app)',
     hosts: ['api.vercel.com'],
   },
   {
     name: 'cloudflare',
     label: 'Cloudflare (API)',
-    why: 'the Cloudflare API for Wrangler and deploys — api.cloudflare.com (NOT *.r2.cloudflarestorage.com)',
+    why: 'the Cloudflare API for Wrangler and deploys, api.cloudflare.com (NOT *.r2.cloudflarestorage.com)',
     hosts: ['api.cloudflare.com'],
   },
   {
     name: 'supabase',
     label: 'Supabase (API + project)',
-    why: 'the Supabase management API and project endpoints — api.supabase.com, *.supabase.co',
+    why: 'the Supabase management API and project endpoints, api.supabase.com, *.supabase.co',
     hosts: ['api.supabase.com', 'supabase.co'],
   },
   {
     name: 'aws',
     label: 'AWS (STS auth only)',
-    why: 'AWS STS for credential/assume-role calls — sts.amazonaws.com only. Deliberately excludes *.amazonaws.com (S3 = exfil sink); add specific regional endpoints (e.g. s3.eu-west-1.amazonaws.com) with `sandbox allow`',
+    why: 'AWS STS for credential/assume-role calls, sts.amazonaws.com only. Deliberately excludes *.amazonaws.com (S3 = exfil sink); add specific regional endpoints (e.g. s3.eu-west-1.amazonaws.com) with `sandbox allow`',
     hosts: ['sts.amazonaws.com'],
   },
 ];

@@ -49,7 +49,7 @@ const HOST_RULES: readonly HostRule[] = [
   { suffix: 'playwright.download.prss.microsoft.com', category: 'native-build', why: 'Playwright browser binaries (postinstall download)', common: true },
   { suffix: 'cdn.playwright.dev', category: 'native-build', why: 'Playwright binaries (postinstall download)', common: true },
   { suffix: 'download.cypress.io', category: 'native-build', why: 'the Cypress test-runner binary (postinstall download)', common: true },
-  { suffix: 'storage.googleapis.com', category: 'cdn', why: 'Google Cloud Storage — often a Chromium/Puppeteer download', common: true },
+  { suffix: 'storage.googleapis.com', category: 'cdn', why: 'Google Cloud Storage, often a Chromium/Puppeteer download', common: true },
   { suffix: 'electronjs.org', category: 'native-build', why: 'Electron binaries (postinstall download)', common: true },
 ];
 
@@ -88,7 +88,7 @@ export function classifyHost(rawHost: string): HostClassification {
   return {
     host,
     category: 'unknown',
-    why: 'not a known registry or build host — unusual for an install to contact',
+    why: 'not a known registry or build host, unusual for an install to contact',
     commonForInstall: false,
   };
 }
@@ -119,7 +119,7 @@ export function hostGlyph(c: HostClassification): string {
   return c.commonForInstall ? '✓' : '⚠';
 }
 
-/** One annotated line per blocked host, e.g. `⚠ exfil.example.com — not a known registry or build host…`. */
+/** One annotated line per blocked host, e.g. `⚠ exfil.example.com, not a known registry or build host…`. */
 export function renderBlockedHostLines(classifications: HostClassification[]): string {
-  return classifications.map((c) => `  ${hostGlyph(c)} ${c.host} — ${c.why}`).join('\n');
+  return classifications.map((c) => `  ${hostGlyph(c)} ${c.host}, ${c.why}`).join('\n');
 }

@@ -1,6 +1,6 @@
 ---
 title: Gate dependencies in CI
-description: The read-only, no-Docker gates that drop into CI and cron — verify, delta, scan, secrets, and signed receipts.
+description: The read-only, no-Docker gates that drop into CI and cron, covering verify, delta, scan, secrets, and signed receipts.
 ---
 
 These commands are read-only, need no container, and exit non-zero on a real problem, so each drops straight into a CI step. None of them install anything.
@@ -12,7 +12,7 @@ These commands are read-only, need no container, and exit non-zero on a real pro
 | Already-installed deps gone bad | `sandbox scan` | a version in the committed lockfile is now flagged as malware |
 | Committed credentials | `sandbox secrets` | an API key, token, or private key is found (value redacted) |
 
-## PR check — gate only the change
+## PR check: gate only the change
 
 ```bash
 sandbox delta --min-release-age 7 --fail-on-advisory
@@ -26,7 +26,7 @@ Diffs the lockfile against the merge base (default `origin/main`; `--base <ref>`
 sandbox scan
 ```
 
-Re-queries OSV for the versions you already have installed. It catches dependencies that turned malicious *after* you installed them — the gap install-time gating can't cover. Run it nightly.
+Re-queries OSV for the versions you already have installed. It catches dependencies that turned malicious *after* you installed them, the gap install-time gating can't cover. Run it nightly.
 
 ## Committed-secret tripwire
 
@@ -55,5 +55,5 @@ sandbox verify-receipt receipt.json --fingerprint <hex>
 `--sign` refuses to sign if any requested check failed, so a receipt can never attest a green boundary over a red one.
 
 :::note
-A non-malware advisory never changes the exit code, same as the install path. There's no "block on any advisory" flag — `scan` and `delta` block on **malware**, and surface the rest.
+A non-malware advisory never changes the exit code, same as the install path. There's no "block on any advisory" flag; `scan` and `delta` block on **malware** and surface the rest.
 :::

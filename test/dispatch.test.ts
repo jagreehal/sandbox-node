@@ -3,7 +3,7 @@ import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } f
 
 const route = (cmd: string): Route | undefined => routePassthrough(cmd.split(' ').filter(Boolean));
 
-describe('routePassthrough — install', () => {
+describe('routePassthrough, install', () => {
   it('routes a plain install for each package manager', () => {
     expect(route('npm install')).toEqual({ model: 'install', pm: 'npm', frozen: false, args: [] });
     expect(route('npm i')).toEqual({ model: 'install', pm: 'npm', frozen: false, args: [] });
@@ -28,7 +28,7 @@ describe('routePassthrough — install', () => {
   });
 });
 
-describe('routePassthrough — add', () => {
+describe('routePassthrough, add', () => {
   it('routes explicit adds', () => {
     expect(route('pnpm add zod')).toEqual({ model: 'add', pm: 'pnpm', pkgs: ['zod'] });
     expect(route('yarn add react react-dom')).toEqual({ model: 'add', pm: 'yarn', pkgs: ['react', 'react-dom'] });
@@ -41,7 +41,7 @@ describe('routePassthrough — add', () => {
   });
 });
 
-describe('routePassthrough — remove', () => {
+describe('routePassthrough, remove', () => {
   it('routes each package manager’s drop-a-dep verbs (and aliases) to the contained remove model', () => {
     expect(route('npm uninstall lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
     expect(route('npm remove lodash')).toEqual({ model: 'remove', pm: 'npm', pkgs: ['lodash'] });
@@ -54,7 +54,7 @@ describe('routePassthrough — remove', () => {
     expect(route('bun rm left-pad')).toEqual({ model: 'remove', pm: 'bun', pkgs: ['left-pad'] });
   });
 
-  it('leaves `npm unlink` a plain run — un-symlinking a linked pkg is not a remove', () => {
+  it('leaves `npm unlink` a plain run, un-symlinking a linked pkg is not a remove', () => {
     expect(route('npm unlink some-pkg')).toEqual({ model: 'run', argv: ['npm', 'unlink', 'some-pkg'] });
   });
 
@@ -63,7 +63,7 @@ describe('routePassthrough — remove', () => {
   });
 });
 
-describe('routePassthrough — update', () => {
+describe('routePassthrough, update', () => {
   it('routes the update family to the gated update model, per package manager', () => {
     expect(route('npm update')).toEqual({ model: 'update', pm: 'npm', verb: 'update', args: [] });
     expect(route('npm up')).toEqual({ model: 'update', pm: 'npm', verb: 'up', args: [] });
@@ -79,7 +79,7 @@ describe('routePassthrough — update', () => {
     expect(route('pnpm up --latest')).toEqual({ model: 'update', pm: 'pnpm', verb: 'up', args: ['--latest'] });
   });
 
-  it('does NOT treat `bun upgrade` as a package update — it upgrades the bun binary, so it stays a run', () => {
+  it('does NOT treat `bun upgrade` as a package update, it upgrades the bun binary, so it stays a run', () => {
     expect(route('bun upgrade')).toEqual({ model: 'run', argv: ['bun', 'upgrade'] });
   });
 
@@ -90,12 +90,12 @@ describe('routePassthrough — update', () => {
     expect(route('yarn dedupe')).toEqual({ model: 'update', pm: 'yarn', verb: 'dedupe', args: [] });
   });
 
-  it('leaves `bun dedupe` a plain run — bun has no dedupe verb', () => {
+  it('leaves `bun dedupe` a plain run, bun has no dedupe verb', () => {
     expect(route('bun dedupe')).toEqual({ model: 'run', argv: ['bun', 'dedupe'] });
   });
 });
 
-describe('routePassthrough — audit fix', () => {
+describe('routePassthrough, audit fix', () => {
   it('routes npm audit fix and pnpm audit --fix to the install-class audit-fix model', () => {
     expect(route('npm audit fix')).toEqual({ model: 'auditFix', pm: 'npm', fixToken: 'fix', args: [] });
     expect(route('npm audit fix --force')).toEqual({ model: 'auditFix', pm: 'npm', fixToken: 'fix', args: ['--force'] });
@@ -121,7 +121,7 @@ describe('routePassthrough — audit fix', () => {
   });
 });
 
-describe('routePassthrough — run', () => {
+describe('routePassthrough, run', () => {
   it('routes scripts and tools verbatim', () => {
     expect(route('npm run dev')).toEqual({ model: 'run', argv: ['npm', 'run', 'dev'] });
     expect(route('pnpm dev')).toEqual({ model: 'run', argv: ['pnpm', 'dev'] });
@@ -144,7 +144,7 @@ describe('routePassthrough — run', () => {
   });
 });
 
-describe('routePassthrough — bun', () => {
+describe('routePassthrough, bun', () => {
   it('routes bun install/add through the install + add models', () => {
     expect(route('bun install')).toEqual({ model: 'install', pm: 'bun', frozen: false, args: [] });
     expect(route('bun i')).toEqual({ model: 'install', pm: 'bun', frozen: false, args: [] });
@@ -161,7 +161,7 @@ describe('routePassthrough — bun', () => {
   });
 });
 
-describe('routePassthrough — not a pass-through', () => {
+describe('routePassthrough, not a pass-through', () => {
   it('returns undefined for unrecognized leaders and empty input', () => {
     expect(route('claude')).toBeUndefined();
     expect(route('frobnicate the widgets')).toBeUndefined();
@@ -169,7 +169,7 @@ describe('routePassthrough — not a pass-through', () => {
   });
 });
 
-describe('isGlobalInstall — global installs across every package manager', () => {
+describe('isGlobalInstall, global installs across every package manager', () => {
   // (cmd, args) mirrors how `main()` calls it: cmd is the leading token, args is everything after.
   const isGlobal = (cmd: string, rest: string) => {
     const args = rest.split(' ').filter(Boolean);
@@ -189,7 +189,7 @@ describe('isGlobalInstall — global installs across every package manager', () 
     expect(isGlobal('yarn', 'global add typescript')).toBe(true);
   });
 
-  it('flags a global REMOVE too — uninstalling a host global cannot happen in a container', () => {
+  it('flags a global REMOVE too, uninstalling a host global cannot happen in a container', () => {
     expect(isGlobal('npm', 'uninstall -g typescript')).toBe(true);
     expect(isGlobal('pnpm', 'remove --global typescript')).toBe(true);
   });
@@ -204,7 +204,7 @@ describe('isGlobalInstall — global installs across every package manager', () 
 
 const unwrap = (cmd: string): string[] | undefined => unwrapSelfInvocation(cmd.split(' ').filter(Boolean));
 
-describe('unwrapSelfInvocation — never sandbox sandbox', () => {
+describe('unwrapSelfInvocation, never sandbox sandbox', () => {
   it('unwraps `npx @jagreehal/sandbox-node <cmd>` to the bare subcommand', () => {
     expect(unwrap('npx @jagreehal/sandbox-node check lodash')).toEqual(['check', 'lodash']);
   });

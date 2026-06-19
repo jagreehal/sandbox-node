@@ -195,14 +195,14 @@ describe('collectRiskHints', () => {
           code: 'install_script',
           package: 'sharp',
           version: '0.33.5',
-          message: 'has postinstall script — contained in sandbox',
+          message: 'has postinstall script, contained in sandbox',
         }),
         expect.objectContaining({
           code: 'recent_version',
           package: 'sharp',
           version: '0.33.5',
           level: 'error',
-          message: 'very recently published 6 hours ago — fresh releases are the supply-chain worm window',
+          message: 'very recently published 6 hours ago; fresh releases are the supply-chain worm window',
         }),
         expect.objectContaining({
           code: 'bin_exposed',
@@ -214,7 +214,7 @@ describe('collectRiskHints', () => {
           code: 'new_package',
           package: 'new-pkg',
           version: '1.2.3',
-          message: 'first published 3 days ago — still a young package',
+          message: 'first published 3 days ago; still a young package',
         }),
         expect.objectContaining({
           code: 'deprecated',
@@ -332,7 +332,7 @@ describe('riskTargetsForInstall', () => {
   });
 });
 
-describe('resolveVersion — prerelease handling', () => {
+describe('resolveVersion, prerelease handling', () => {
   const preClient: RegistryClient = {
     async getPackument() {
       return {
@@ -493,7 +493,7 @@ describe('checkReleaseAgeDeep', () => {
   });
 });
 
-describe('suggestAgedVersion — the known-good older version to pin', () => {
+describe('suggestAgedVersion, the known-good older version to pin', () => {
   // latest (1.3.0) is fresh; 1.2.0 is well-aged; 1.2.1 is a fresh patch; 1.3.0-rc.1 a prerelease;
   // 0.9.0 is deprecated. The pick must be the NEWEST stable, non-deprecated, aged-in version: 1.2.0.
   const client: RegistryClient = {
@@ -538,8 +538,8 @@ describe('suggestAgedVersion — the known-good older version to pin', () => {
   });
 });
 
-describe('planRiskHintLog — invisible when clean, clear when not', () => {
-  const recent: RiskHint = { level: 'error', code: 'recent_version', package: 'sharp', version: '0.99.0', message: 'very recently published 2 hours ago — fresh releases are the supply-chain worm window', detail: { severity: 'strong' } as never };
+describe('planRiskHintLog, invisible when clean, clear when not', () => {
+  const recent: RiskHint = { level: 'error', code: 'recent_version', package: 'sharp', version: '0.99.0', message: 'very recently published 2 hours ago; fresh releases are the supply-chain worm window', detail: { severity: 'strong' } as never };
   const bin: RiskHint = { level: 'warn', code: 'bin_exposed', package: 'sharp', version: '0.99.0', message: '', detail: { bin: 'sharp -> ./cli.js' } };
 
   it('stays SILENT on the install path when nothing is flagged (debug, not info)', () => {

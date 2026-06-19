@@ -70,7 +70,7 @@ export function classifyCommand(argv: string[]): CommandKind {
  */
 export function containedSuccessLine(code: number, argv: string[]): string | undefined {
   if (code !== 0 || classifyCommand(argv) === 'other') return undefined;
-  return '✓ done — ran in a throwaway sandbox, now deleted; it never had your credentials or home dir';
+  return '✓ done, ran in a throwaway sandbox, now deleted; it never had your credentials or home dir';
 }
 
 function isExpectedProjectWrite(rel: string, kind: CommandKind): boolean {
