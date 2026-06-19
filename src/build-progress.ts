@@ -9,8 +9,8 @@ export type BuildingState = 'absent' | 'stale';
 /** The headline shown when a build starts, framed by why it's happening. Pure. */
 export function buildNotice(state: BuildingState): string {
   return state === 'absent'
-    ? 'Building the sandbox image — one-time setup (~30s). This is the Node.js container your installs and dev commands run inside; cached after this run.'
-    : 'Rebuilding the sandbox image — config changed since it was last built (~30s). The image must match your sandbox.config.json so the boundary is reproducible.';
+    ? 'Building the sandbox image, one-time setup (~30s). This is the Node.js container your installs and dev commands run inside; cached after this run.'
+    : 'Rebuilding the sandbox image, config changed since it was last built (~30s). The image must match your sandbox.config.json so the boundary is reproducible.';
 }
 
 const READY_NOTICE = 'Sandbox image ready';

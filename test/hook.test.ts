@@ -104,7 +104,7 @@ describe('mergePreToolUseHook', () => {
     expect((merged.hooks as any).PreToolUse).toHaveLength(1);
   });
 
-  it('is idempotent — re-merging does not duplicate the entry', () => {
+  it('is idempotent, re-merging does not duplicate the entry', () => {
     const once = mergePreToolUseHook({});
     const twice = mergePreToolUseHook(once);
     expect((twice.hooks as any).PreToolUse).toHaveLength(1);

@@ -130,7 +130,7 @@ describe('managed block install/update/remove', () => {
     expect(statusPath({ shell: 'zsh', homedir: dir }).messages[0]).toMatch(/installed and current/);
   });
 
-  it('is idempotent — re-running updates in place without duplicating', () => {
+  it('is idempotent, re-running updates in place without duplicating', () => {
     const dir = home();
     installPath({ shell: 'zsh', homedir: dir });
     const res = installPath({ shell: 'zsh', homedir: dir });

@@ -23,9 +23,9 @@ export const MANAGED_IMAGE = `${MANAGED_IMAGE_REPO}:latest`;
 
 /** Markers a full-replacement Dockerfile must keep, or the boundary it promises is hollow. */
 const REQUIRED_MARKERS: { needle: string; missing: string }[] = [
-  { needle: 'sbx-net-guard', missing: "the metadata guard (sbx-net-guard) — 'on'/full-network mode will NOT blackhole cloud metadata (169.254.169.254)" },
-  { needle: 'libcap2-bin', missing: 'libcap2-bin — the guard cannot drop Linux capabilities before your command runs' },
-  { needle: 'corepack', missing: 'corepack — pnpm/yarn will try to download at run time and fail under the no-network/allowlist phases' },
+  { needle: 'sbx-net-guard', missing: "the metadata guard (sbx-net-guard), 'on'/full-network mode will NOT blackhole cloud metadata (169.254.169.254)" },
+  { needle: 'libcap2-bin', missing: 'libcap2-bin, the guard cannot drop Linux capabilities before your command runs' },
+  { needle: 'corepack', missing: 'corepack, pnpm/yarn will try to download at run time and fail under the no-network/allowlist phases' },
 ];
 
 /**

@@ -30,9 +30,9 @@ export interface PortEndpoint {
 const PORT_FORMS = 'use "PORT" (e.g. "4321"), "HOST:CONTAINER" (e.g. "3000:3000"), or "IP:HOST:CONTAINER"';
 
 function asPortNumber(value: string, spec: string | number): number {
-  if (!/^\d+$/.test(value)) throw new Error(`sandbox: invalid port "${spec}" — ${PORT_FORMS}`);
+  if (!/^\d+$/.test(value)) throw new Error(`sandbox: invalid port "${spec}", ${PORT_FORMS}`);
   const n = Number(value);
-  if (n < 1 || n > 65535) throw new Error(`sandbox: invalid port "${spec}" — ${n} is out of range (1–65535)`);
+  if (n < 1 || n > 65535) throw new Error(`sandbox: invalid port "${spec}", ${n} is out of range (1–65535)`);
   return n;
 }
 
@@ -56,10 +56,10 @@ export function parsePortSpec(spec: string | number): ParsedPort {
   }
   if (parts.length === 3) {
     const ip = parts[0]!;
-    if (ip === '') throw new Error(`sandbox: invalid port "${spec}" — ${PORT_FORMS}`);
+    if (ip === '') throw new Error(`sandbox: invalid port "${spec}", ${PORT_FORMS}`);
     return { ip, host: asPortNumber(parts[1]!, spec), container: asPortNumber(parts[2]!, spec) };
   }
-  throw new Error(`sandbox: invalid port "${spec}" — ${PORT_FORMS}`);
+  throw new Error(`sandbox: invalid port "${spec}", ${PORT_FORMS}`);
 }
 
 /** True when a spec parses; used by the config schema's `.refine` for a friendly error. */

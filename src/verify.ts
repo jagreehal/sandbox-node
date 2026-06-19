@@ -25,7 +25,7 @@ export function verifyConfig(cwd: string, configPath?: string): VerifyResult {
   // `cwd` still finds `cwd/sandbox.config.json`. The gate fails only when that file truly doesn't exist.
   const projectFile = configPath ?? path.join(cwd, 'sandbox.config.json');
   if (!existsSync(projectFile)) {
-    return { ok: false, summary, problems: [`no committed sandbox.config.json found at ${projectFile} — run \`sandbox init\` and commit it`] };
+    return { ok: false, summary, problems: [`no committed sandbox.config.json found at ${projectFile}, run \`sandbox init\` and commit it`] };
   }
 
   let loaded;
@@ -106,7 +106,7 @@ export function readSigningKey(file: string): string {
   try {
     return readFileSync(file, 'utf8');
   } catch {
-    throw new Error(`couldn't read signing key at ${file} — generate one with \`sandbox keygen\` and point SANDBOX_SIGNING_KEY at the private half`);
+    throw new Error(`couldn't read signing key at ${file}, generate one with \`sandbox keygen\` and point SANDBOX_SIGNING_KEY at the private half`);
   }
 }
 
@@ -119,7 +119,7 @@ export function runKeygen(opts: { json?: boolean } = {}): number {
     return 0;
   }
   // Keys go to stdout so the user pipes each half where it belongs; guidance goes to stderr (log.*).
-  log.info('Ed25519 signing keypair — store the PRIVATE key as a CI secret, commit/pin the fingerprint:');
+  log.info('Ed25519 signing keypair, store the PRIVATE key as a CI secret, commit/pin the fingerprint:');
   log.info(`  fingerprint: ${fingerprint}  (set SANDBOX_TRUSTED_KEY to this to pin the signer)`);
   log.info('  private key → point SANDBOX_SIGNING_KEY at a file holding it, and NEVER commit it');
   console.log(privateKeyPem.trimEnd());
@@ -143,10 +143,10 @@ export function runAuditVerify(file: string, opts: { json?: boolean } = {}): num
     return verdict.ok ? 0 : 1;
   }
   if (verdict.ok) {
-    log.info(`audit: chain intact — ${verdict.length} entr${verdict.length === 1 ? 'y' : 'ies'}, no tampering detected`);
+    log.info(`audit: chain intact, ${verdict.length} entr${verdict.length === 1 ? 'y' : 'ies'}, no tampering detected`);
     return 0;
   }
-  log.error(`audit: chain BROKEN at seq ${verdict.brokenAt} — ${verdict.reason}`);
+  log.error(`audit: chain BROKEN at seq ${verdict.brokenAt}, ${verdict.reason}`);
   return 1;
 }
 
@@ -166,7 +166,7 @@ export function runVerifyReceipt(file: string, opts: { trustedFingerprint?: stri
     return verdict.ok ? 0 : 1;
   }
   if (verdict.ok) {
-    log.info(`receipt verified (signer ${verdict.fingerprint}) — boundary attested at ${receipt.payload.verifiedAt}`);
+    log.info(`receipt verified (signer ${verdict.fingerprint}), boundary attested at ${receipt.payload.verifiedAt}`);
     for (const line of receipt.payload.summary) log.info(`  ${line}`);
     return 0;
   }

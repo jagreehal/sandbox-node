@@ -47,7 +47,7 @@ describe('ensureLocalConfigIgnored', () => {
     expect(body).toContain('sandbox.config.local.json');
   });
 
-  it('is idempotent — no change when the entry is already present', () => {
+  it('is idempotent, no change when the entry is already present', () => {
     const dir = tmp();
     writeFileSync(path.join(dir, '.gitignore'), 'sandbox.config.local.json\n');
     expect(ensureLocalConfigIgnored(dir)).toBe(false);

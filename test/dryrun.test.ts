@@ -28,15 +28,15 @@ function plan(overrides: Partial<RunPlan> = {}): RunPlan {
 describe('renderPlanSummary', () => {
   it('shows the command, image, writable + read-only mounts, and the egress allowlist', () => {
     const out = renderPlanSummary(plan());
-    expect(out).toContain('dry run — nothing was executed');
+    expect(out).toContain('dry run, nothing was executed');
     expect(out).toContain('command   npm install');
     expect(out).toContain('writable  /Users/you/app -> /workspace');
     expect(out).toContain('readonly  .git, package.json'); // /workspace prefix stripped
-    expect(out).toContain('allowlist — reaches only: npmjs.org, npmjs.com');
+    expect(out).toContain('allowlist, reaches only: npmjs.org, npmjs.com');
   });
 
   it('reports no credentials granted by default (ambient env is hidden)', () => {
-    expect(renderPlanSummary(plan())).toContain('grants    none — host credentials stay out');
+    expect(renderPlanSummary(plan())).toContain('grants    none; host credentials stay out');
   });
 
   it('surfaces a granted env var and ssh-agent', () => {

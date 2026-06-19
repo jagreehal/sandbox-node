@@ -406,7 +406,7 @@ Sandbox commands:
   build                build or rebuild the sandbox and egress-proxy images
   approve-builds [pkg] record pnpm dependency build-script decisions from
                        pnpm-workspace.yaml; no args = approve all pending, --deny records false
-  check [pkg|file.json] audit packages BEFORE you install them (npq-style) — no container, no
+  check [pkg|file.json] audit packages BEFORE you install them — no container, no
                        Docker: query the registry + OSV and print findings. Bare names are the
                        common case (sandbox check express lodash@4); no args audits the whole
                        project (root + every workspace package.json); pass a package.json to audit
@@ -931,7 +931,7 @@ After that, keep the workflow simple:
 
 ```bash
 sandbox doctor                  # check setup
-sandbox check express           # audit a package before installing (npq-style, no Docker)
+sandbox check express           # audit a package before installing (no Docker)
 sandbox npm install             # install dependencies safely
 sandbox pnpm add zod            # add a dependency safely
 sandbox pnpm remove zod         # drop one (uninstall scripts contained)

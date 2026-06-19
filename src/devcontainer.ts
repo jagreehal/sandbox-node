@@ -203,7 +203,7 @@ iptables -P FORWARD DROP
 
 # Self-test: a domain that is NOT allowlisted must be unreachable.
 if curl --connect-timeout 4 -sf https://example.com >/dev/null 2>&1; then
-  echo "init-firewall: FAILED — example.com reachable but should be blocked" >&2
+  echo "init-firewall: FAILED, example.com reachable but should be blocked" >&2
   exit 1
 fi
 echo "init-firewall: egress locked to ${domains.length} allowed domains"

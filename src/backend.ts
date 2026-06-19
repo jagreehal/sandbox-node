@@ -96,7 +96,7 @@ async function buildSandbox(bin: string, spec: BuildSpec): Promise<number> {
   const label = ['--label', `${SPEC_LABEL}=${specFingerprint(spec)}`];
   if (spec.customDockerfile) {
     if (!existsSync(spec.customDockerfile)) throw new Error(`sandbox: build.customDockerfileUnsafe not found: ${spec.customDockerfile}`);
-    log.warn(`build.customDockerfileUnsafe — bundled security layers are NOT applied; you own the boundary (${spec.customDockerfile})`);
+    log.warn(`build.customDockerfileUnsafe, bundled security layers are NOT applied; you own the boundary (${spec.customDockerfile})`);
     for (const warning of customDockerfileWarnings(readFileSync(spec.customDockerfile, 'utf8'))) log.warn(warning);
     return run(bin, ['build', '-t', spec.tag, ...label, '-f', spec.customDockerfile, dirname(spec.customDockerfile)]);
   }

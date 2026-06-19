@@ -95,7 +95,7 @@ function writeWorkspace(dir: string, entry: string, code: string, files: Record<
  * "sandbox" packages (which Node's own docs warn are NOT security boundaries — a one-line escape
  * reaches the host), the code runs in a throwaway container with no host credentials mounted and,
  * by default, no network at all. The wall-clock timeout is enforced by `timeout(1)` running as the
- * container's init process — a separate process from your code — so a `while (true) {}` can't block,
+ * container's init process, a separate process from your code, so a `while (true) {}` can't block,
  * clear, or outlast it the way it defeats a `vm` timeout. (It is in-container enforcement, not an
  * external host supervisor; there is no separate host-side hard cap.)
  *

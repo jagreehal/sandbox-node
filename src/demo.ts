@@ -57,7 +57,7 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     needs: { network: 'none' },
     // On an unprotected host the redirect succeeds (exit 0); against a read-only mount it fails.
     contained: (o) => o.code !== 0,
-    explain: (o) => (o.code !== 0 ? 'the write was rejected — .git is read-only inside the sandbox' : 'the hook was written — containment FAILED'),
+    explain: (o) => (o.code !== 0 ? 'the write was rejected, .git is read-only inside the sandbox' : 'the hook was written, containment FAILED'),
   },
   {
     id: 'credential-theft',
@@ -68,7 +68,7 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     needs: { network: 'none' },
     // `cat` exits non-zero when every target is absent — which is the whole point: there's nothing to read.
     contained: (o) => o.code !== 0,
-    explain: (o) => (o.code !== 0 ? 'nothing to read — your keys, tokens and .env never entered the container' : 'a credential file was readable — containment FAILED'),
+    explain: (o) => (o.code !== 0 ? 'nothing to read, your keys, tokens and .env never entered the container' : 'a credential file was readable, containment FAILED'),
   },
   {
     id: 'metadata-pivot',
@@ -78,12 +78,12 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     attack: [
       'node',
       '-e',
-      `fetch('http://169.254.169.254/latest/meta-data/',{signal:AbortSignal.timeout(5000)}).then(()=>{console.log('REACHED IMDS — leak');process.exit(0)}).catch(()=>{console.log('IMDS unreachable');process.exit(${IMDS_BLOCKED_CODE})})`,
+      `fetch('http://169.254.169.254/latest/meta-data/',{signal:AbortSignal.timeout(5000)}).then(()=>{console.log('REACHED IMDS, leak');process.exit(0)}).catch(()=>{console.log('IMDS unreachable');process.exit(${IMDS_BLOCKED_CODE})})`,
     ],
     // Open-network mode is where IMDS is even routable; the guard must make it unreachable.
     needs: { network: 'on' },
     contained: (o) => o.code === IMDS_BLOCKED_CODE,
-    explain: (o) => (o.code === IMDS_BLOCKED_CODE ? 'IMDS was unreachable — the guard blackholed 169.254.169.254' : 'the metadata endpoint answered — containment FAILED'),
+    explain: (o) => (o.code === IMDS_BLOCKED_CODE ? 'IMDS was unreachable, the guard blackholed 169.254.169.254' : 'the metadata endpoint answered, containment FAILED'),
   },
   {
     id: 'egress-exfil',
@@ -97,10 +97,10 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     contained: (o) => o.deniedHosts.length > 0 || o.canaryHits.length > 0,
     explain: (o) =>
       o.canaryHits.length
-        ? `egress blocked AND the canary tripped — a planted credential was caught leaving for ${o.deniedHosts.join(', ') || 'a filtered host'}`
+        ? `egress blocked AND the canary tripped, a planted credential was caught leaving for ${o.deniedHosts.join(', ') || 'a filtered host'}`
         : o.deniedHosts.length
           ? `egress refused the attacker host(s): ${o.deniedHosts.join(', ')}`
-          : 'the request was not blocked — containment FAILED',
+          : 'the request was not blocked, containment FAILED',
   },
 ];
 
@@ -147,7 +147,7 @@ export async function runDemo(runner: DemoRunner, opts: { scenarios?: DemoScenar
     try {
       outcome = await runner(s);
     } catch (e) {
-      logger.error(`    ERROR  : could not run scenario — ${e instanceof Error ? e.message : String(e)}`);
+      logger.error(`    ERROR  : could not run scenario, ${e instanceof Error ? e.message : String(e)}`);
       failed++;
       continue;
     }
@@ -157,11 +157,11 @@ export async function runDemo(runner: DemoRunner, opts: { scenarios?: DemoScenar
       logger.info(`    → ${s.explain(outcome)}`);
     } else {
       failed++;
-      logger.error(`    ✗ NOT CONTAINED — ${s.explain(outcome)}`);
+      logger.error(`    ✗ NOT CONTAINED, ${s.explain(outcome)}`);
     }
   }
 
-  if (failed === 0) logger.info(`demo: all ${contained} attack(s) contained — the sandbox held on every control`);
-  else logger.error(`demo: ${failed} of ${scenarios.length} attack(s) were NOT contained — investigate the boundary`);
+  if (failed === 0) logger.info(`demo: all ${contained} attack(s) contained, the sandbox held on every control`);
+  else logger.error(`demo: ${failed} of ${scenarios.length} attack(s) were NOT contained, investigate the boundary`);
   return failed === 0 ? 0 : 1;
 }

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Resolver } from 'node:dns/promises';
+import type { LogLevel } from './log.js';
 import { lockfileName, type PackageManager } from './package-manager.js';
 import type { ProjectFacts } from './project.js';
 
@@ -65,6 +66,59 @@ export type RiskCode = RiskHint['code'];
 export interface RiskTarget {
   name: string;
   spec: string;
+}
+
+/** One line the CLI should emit at the given log level — the rendered risk-hint report. */
+export interface RiskLogLine {
+  level: LogLevel;
+  text: string;
+}
+
+function formatRiskPackage(hint: RiskHint): string {
+  return `${hint.package}${hint.version ? `@${hint.version}` : ''}`;
+}
+
+function riskDetailLine(hint: RiskHint): string {
+  if (hint.code === 'bin_exposed') return `adds bin: ${hint.detail.bin}`;
+  if (hint.code === 'recent_version') return hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
+  // High-signal codes (typosquat, provenance regression, maintainer takeover, expired domain) are
+  // error-level — flag them with the same `!!` emphasis as a very-fresh version.
+  return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
+}
+
+/**
+ * Decide what the risk-hint report should print, and at what level — pure, so the "invisible when
+ * clean" behaviour is testable without a logger. `contained` is the call site: the install path
+ * (true) is about to run inside the box, so a clean check stays out of the way at `debug`; an
+ * explicit `check` (false) confirms it looked, since that's the whole reason it was run.
+ */
+export function planRiskHintLog(targetCount: number, allHints: RiskHint[], { contained }: { contained: boolean }): RiskLogLine[] {
+  const out: RiskLogLine[] = [];
+  const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
+  const checked = targetCount ? `checked ${targetCount} package${targetCount === 1 ? '' : 's'} for registry risk hints` : undefined;
+  if (!hints.length) {
+    if (checked) out.push({ level: contained ? 'debug' : 'info', text: checked });
+    return out;
+  }
+  if (checked) out.push({ level: 'info', text: checked });
+  out.push({ level: 'warn', text: `${hints.length} thing${hints.length === 1 ? '' : 's'} worth a look before installing` });
+  const grouped = new Map<string, RiskHint[]>();
+  for (const hint of hints) {
+    const key = formatRiskPackage(hint);
+    grouped.set(key, [...(grouped.get(key) ?? []), hint]);
+  }
+  for (const [pkg, pkgHints] of grouped) {
+    const level: LogLevel = pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
+    out.push({ level, text: [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint)}`)].join('\n') });
+  }
+  // One plain "why this is fine" line, instead of repeating "still contained" on every hint above.
+  out.push({
+    level: 'info',
+    text: contained
+      ? "heads-up only, the install runs in a throwaway container, so this code can't reach your credentials, home dir, or the rest of the internet. Continuing."
+      : "heads-up only, this was a check, so nothing was installed or downloaded. Run the install when you're ready.",
+  });
+  return out;
 }
 
 export interface RegistryClient {
@@ -644,7 +698,7 @@ function maintainerChangeHint(pkg: ResolvedTarget, now: Date): RiskHint | undefi
         code: 'maintainer_change',
         package: pkg.name,
         version: pkg.version,
-        message: `first release ever by publisher ${publisher} (${humanAge(age)}) — possible account takeover; install still contained`,
+        message: `first release ever by publisher ${publisher} (${humanAge(age)}); possible account takeover`,
         detail: { kind: 'new_publisher', publisher, firstPublishAgeDays: Math.floor(age / DAY_MS) },
       };
     }
@@ -660,7 +714,7 @@ function maintainerChangeHint(pkg: ResolvedTarget, now: Date): RiskHint | undefi
         code: 'maintainer_change',
         package: pkg.name,
         version: pkg.version,
-        message: `publisher ${publisher} was dormant ${Math.floor(gap / DAY_MS)} days before this release — install still contained`,
+        message: `publisher ${publisher} was dormant ${Math.floor(gap / DAY_MS)} days before this release`,
         detail: { kind: 'dormant', publisher, gapDays: Math.floor(gap / DAY_MS) },
       };
     }
@@ -688,7 +742,7 @@ export interface NsResolver {
 
 /**
  * NS resolver with a hard per-lookup timeout (so a slow resolver can't stall preflight). Defaults
- * to the host's configured DNS servers — it respects split-horizon / corporate DNS and doesn't route
+ * to the host's configured DNS servers, it respects split-horizon / corporate DNS and doesn't route
  * maintainer-domain queries through fixed public resolvers (which would leak that you ran the check
  * to an attacker-chosen authoritative server). Set `SANDBOX_DNS_SERVERS` (comma-separated IPs) to
  * override; an invalid override falls back to the system resolver rather than disabling the signal.
@@ -759,7 +813,7 @@ export async function expiredDomainHints(
         code: 'expired_domain',
         package: pkg.name,
         version: pkg.version,
-        message: `maintainer email domain "${bad}" no longer resolves — can be re-registered for account takeover; install still contained`,
+        message: `maintainer email domain "${bad}" no longer resolves, can be re-registered for account takeover`,
         detail: { domain: bad },
       });
     }
@@ -812,7 +866,7 @@ export async function lowDownloadHints(
         code: 'low_downloads',
         package: pkg.name,
         version: pkg.version,
-        message: `only ${downloads} downloads last month — very low usage; install still contained`,
+        message: `only ${downloads} downloads last month; very low usage`,
         detail: { downloads },
       });
     }
@@ -1131,7 +1185,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'typosquat',
         package: pkg.name,
         version: pkg.version,
-        message: `name is within 1–2 edits of popular package${similarTo.length === 1 ? '' : 's'}: ${similarTo.slice(0, 3).join(', ')} — possible typosquat`,
+        message: `name is within 1–2 edits of popular package${similarTo.length === 1 ? '' : 's'}: ${similarTo.slice(0, 3).join(', ')}; possible typosquat`,
         detail: { similarTo },
       });
     }
@@ -1142,7 +1196,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'provenance_regression',
         package: pkg.name,
         version: pkg.version,
-        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it — release-path change; install still contained`,
+        message: `version ${priorProvenance} shipped npm provenance but ${pkg.version} dropped it, release-path change`,
         detail: { priorVersion: priorProvenance },
       });
     }
@@ -1155,7 +1209,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'missing_metadata',
         package: pkg.name,
         version: pkg.version,
-        message: `missing ${missing.join(' and ')} metadata — lower-trust package`,
+        message: `missing ${missing.join(' and ')} metadata; lower-trust package`,
         detail: { missing },
       });
     }
@@ -1166,7 +1220,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'install_script',
           package: pkg.name,
           version: pkg.version,
-          message: `has ${script} script — contained in sandbox`,
+          message: `has ${script} script, contained in sandbox`,
           detail: { script },
         });
       }
@@ -1179,7 +1233,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'recent_version',
           package: pkg.name,
           version: pkg.version,
-          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)} — install still contained`,
+          message: `${age < RECENT_VERSION_STRONG_MS ? 'very recently published' : 'recently published'} ${humanAge(age)}; fresh releases are the supply-chain worm window`,
           detail: { publishedAt: pkg.publishedAt.toISOString(), severity: age < RECENT_VERSION_STRONG_MS ? 'strong' : 'light' } satisfies RecentVersionDetail,
         });
       }
@@ -1192,7 +1246,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
           code: 'new_package',
           package: pkg.name,
           version: pkg.version,
-          message: `first published ${humanAge(age)} — install still contained`,
+          message: `first published ${humanAge(age)}; still a young package`,
           detail: { createdAt: pkg.createdAt.toISOString() },
         });
       }
@@ -1204,7 +1258,7 @@ export function hintsFromResolved(resolved: ResolvedTarget[], now: Date): RiskHi
         code: 'bin_exposed',
         package: pkg.name,
         version: pkg.version,
-        message: `exposes command-line binary — contained in sandbox`,
+        message: `exposes command-line binary, contained in sandbox`,
         detail: { bin },
       });
     }

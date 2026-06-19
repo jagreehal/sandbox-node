@@ -41,16 +41,16 @@ export async function promptForBlockedEgress(deniedHosts: string[], opts: Descri
   const allKnown = classified.every((c) => c.commonForInstall);
   p.log.warn(`Blocked egress (default-deny) to:\n${renderBlockedHostLines(classified)}`);
   if (!allKnown) {
-    p.log.warn('One or more hosts are not known install/registry hosts. If you did not expect this, cancel and inspect — it can be an exfiltration attempt.');
+    p.log.warn('One or more hosts are not known install/registry hosts. If you did not expect this, cancel and inspect, it can be an exfiltration attempt.');
   }
 
   const choice = await p.select({
     message: 'What should sandbox do?',
     options: [
-      { value: 'allow-once', label: 'Allow once', hint: 'retry with these hosts, this run only — nothing saved' },
+      { value: 'allow-once', label: 'Allow once', hint: 'retry with these hosts, this run only, nothing saved' },
       { value: 'allow-project', label: 'Allow & save for the team', hint: 'write to sandbox.config.json (shows up in your PR diff)' },
       { value: 'allow-local', label: 'Allow & save for me', hint: 'write to sandbox.config.local.json (personal, git-ignored)' },
-      { value: 'full-network', label: 'Full network once', hint: 'retry with NO allowlist — disables exfil protection for this run' },
+      { value: 'full-network', label: 'Full network once', hint: 'retry with NO allowlist, disables exfil protection for this run' },
       { value: 'cancel', label: 'Cancel', hint: 'stop here, boundary unchanged' },
     ],
     // The cursor lands on the first option (Allow once) — the safest, reversible default.

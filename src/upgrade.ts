@@ -76,7 +76,7 @@ export function ncuPasses(policy: UpgradePolicy, exempt: string[], pm: PackageMa
 
 export interface ProposedUpgrade {
   name: string;
-  /** Declared range today, e.g. `^4.17.0` (or `—` when ncu names a dep we can't find declared). */
+  /** Declared range today, e.g. `^4.17.0` (or `-` when ncu names a dep we can't find declared). */
   from: string;
   /** Range ncu would write, e.g. `^4.18.0`. */
   to: string;
@@ -103,7 +103,7 @@ export function parseUpgrades(json: string, current: Record<string, string>): Pr
   }
   return Object.entries(map)
     .filter(([, to]) => typeof to === 'string')
-    .map(([name, to]) => ({ name, from: current[name] ?? '—', to: to as string }))
+    .map(([name, to]) => ({ name, from: current[name] ?? '-', to: to as string }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

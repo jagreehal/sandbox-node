@@ -24,7 +24,7 @@ export const SHELLS: readonly Shell[] = ['zsh', 'bash', 'fish', 'pwsh'];
 /** Bump when the managed block changes, so `sandbox path status` can flag a stale installed block. */
 export const PATH_WRAPPER_VERSION = 3;
 
-const MARKER_BEGIN = '# >>> sandbox path (managed block — edit via `sandbox path`, not by hand) >>>';
+const MARKER_BEGIN = '# >>> sandbox path (managed block, edit via `sandbox path`, not by hand) >>>';
 const MARKER_END = '# <<< sandbox path <<<';
 const VERSION_LINE = `# sandbox-path-version: ${PATH_WRAPPER_VERSION}`;
 
@@ -107,7 +107,7 @@ function posixBody(): string {
     '__sandbox_pm() {',
     '  local pm=$1; shift',
     '  if [ -n "${SANDBOX_OFF:-}" ] || ! command -v sandbox >/dev/null 2>&1; then command "$pm" "$@"; return; fi',
-    '  # Global installs are host tooling — never sandbox them (a -g install in an ephemeral container does nothing on the host).',
+    '  # Global installs are host tooling, never sandbox them (a -g install in an ephemeral container does nothing on the host).',
     '  local a; for a in "$@"; do case "$a" in -g|--global|--location=global) command "$pm" "$@"; return ;; esac; done',
     '  local verb=${1:-}',
     '  if [ "$pm" = yarn ] && [ -z "$verb" ]; then __sandbox_go yarn; return; fi',
@@ -156,7 +156,7 @@ function fishBody(): string {
     '    if set -q SANDBOX_OFF; or not command -v sandbox >/dev/null 2>&1',
     '        command $pm $argv; return',
     '    end',
-    '    # Global installs are host tooling — never sandbox them.',
+    '    # Global installs are host tooling, never sandbox them.',
     '    for __a in $argv',
     '        switch $__a; case -g --global --location=global; command $pm $argv; return; end',
     '    end',
@@ -206,7 +206,7 @@ function pwshBody(): string {
     '  param([string]$Pm, [Parameter(ValueFromRemainingArguments=$true)]$Rest)',
     '  $real = __Sandbox-Real $Pm',
     '  if ($env:SANDBOX_OFF -or -not (Get-Command sandbox -ErrorAction SilentlyContinue)) { if ($real) { & $real @Rest }; return }',
-    "  # Global installs are host tooling — never sandbox them.",
+    "  # Global installs are host tooling, never sandbox them.",
     "  if ($Rest | Where-Object { $_ -eq '-g' -or $_ -eq '--global' -or $_ -eq '--location=global' }) { if ($real) { & $real @Rest }; return }",
     "  $verb = if ($Rest.Count -ge 1) { [string]$Rest[0] } else { '' }",
     '  $go = $false',
@@ -347,7 +347,7 @@ export function uninstallPath(opts: { shell: Shell; homedir?: string }): PathAct
   const { shell } = opts;
   if (shell === 'pwsh') return { shell, messages: ['sandbox: remove the sandbox block from your PowerShell $PROFILE by hand (open with `notepad $PROFILE`).'] };
   const file = rcFileFor(shell, opts.homedir)!;
-  if (!existsSync(file)) return { shell, file, messages: [`sandbox: nothing to remove — ${file} does not exist`] };
+  if (!existsSync(file)) return { shell, file, messages: [`sandbox: nothing to remove, ${file} does not exist`] };
   const before = readFileSync(file, 'utf8');
   if (blockState(before) === 'absent') return { shell, file, messages: [`sandbox: no sandbox wrappers found in ${file}`] };
   writeFileSync(file, removeBlock(before));
@@ -357,14 +357,14 @@ export function uninstallPath(opts: { shell: Shell; homedir?: string }): PathAct
 /** `sandbox path status` — report whether the block is present and current. */
 export function statusPath(opts: { shell: Shell; homedir?: string }): PathActionResult {
   const { shell } = opts;
-  if (shell === 'pwsh') return { shell, messages: ['sandbox: PowerShell is print-only — run `sandbox path print --shell pwsh` and check your $PROFILE.'] };
+  if (shell === 'pwsh') return { shell, messages: ['sandbox: PowerShell is print-only, run `sandbox path print --shell pwsh` and check your $PROFILE.'] };
   const file = rcFileFor(shell, opts.homedir)!;
   const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const state = blockState(text);
   const line = {
-    absent: `sandbox: not installed in ${file} — run \`sandbox path install\``,
+    absent: `sandbox: not installed in ${file}, run \`sandbox path install\``,
     current: `sandbox: installed and current in ${file}`,
-    stale: `sandbox: installed but OUT OF DATE in ${file} — re-run \`sandbox path install\` to refresh`,
+    stale: `sandbox: installed but OUT OF DATE in ${file}, re-run \`sandbox path install\` to refresh`,
   }[state];
   return { shell, file, messages: [line] };
 }

@@ -19,7 +19,7 @@ import {
 
 const policy = (over: Partial<UpgradePolicy> = {}): UpgradePolicy => ({ cooldownDays: 7, target: 'latest', reject: [], filter: [], ...over });
 
-describe('ncuArgv — config → ncu flags', () => {
+describe('ncuArgv, config → ncu flags', () => {
   it('maps the release-age threshold onto --cooldown <n>d and asks for a JSON preview', () => {
     expect(ncuArgv(policy({ cooldownDays: 7 }), 'npm')).toEqual(
       ['--packageManager', 'npm', '--cooldown', '7d', '--jsonUpgraded'],
@@ -51,7 +51,7 @@ describe('ncuArgv — config → ncu flags', () => {
   });
 });
 
-describe('ncuPasses — honoring the per-package cooldown exemption', () => {
+describe('ncuPasses, honoring the per-package cooldown exemption', () => {
   it('is a single pass when there is no cooldown', () => {
     expect(ncuPasses(policy({ cooldownDays: 0 }), ['@me/*'], 'npm')).toHaveLength(1);
   });
@@ -98,8 +98,8 @@ describe('parseUpgrades', () => {
     ]);
   });
 
-  it('marks a dep with no declared range as — rather than dropping it', () => {
-    expect(parseUpgrades('{"newdep":"^1.0.0"}', current)[0]).toMatchObject({ name: 'newdep', from: '—' });
+  it('marks a dep with no declared range as, rather than dropping it', () => {
+    expect(parseUpgrades('{"newdep":"^1.0.0"}', current)[0]).toMatchObject({ name: 'newdep', from: '-' });
   });
 
   it('returns [] for ncu\'s empty result and for unparseable output', () => {
@@ -130,7 +130,7 @@ describe('upgradeTargets', () => {
   });
 });
 
-describe('classifyUpgrades — gate precedence', () => {
+describe('classifyUpgrades, gate precedence', () => {
   const ups: ProposedUpgrade[] = [
     { name: 'clean', from: '1.0.0', to: '1.1.0' },
     { name: 'fresh', from: '1.0.0', to: '2.0.0' },
@@ -187,7 +187,7 @@ describe('readDeclaredRanges', () => {
   });
 });
 
-describe('applyUpgrades — write exactly what was gated', () => {
+describe('applyUpgrades, write exactly what was gated', () => {
   const pkg = JSON.stringify(
     {
       name: 'demo',
@@ -222,7 +222,7 @@ describe('applyUpgrades — write exactly what was gated', () => {
   });
 
   it('ignores a proposal for a package not declared anywhere', () => {
-    const out = applyUpgrades(pkg, [{ name: 'ghost', from: '—', to: '^9.0.0' }]);
+    const out = applyUpgrades(pkg, [{ name: 'ghost', from: '-', to: '^9.0.0' }]);
     expect(JSON.parse(out)).toEqual(JSON.parse(pkg));
   });
 });

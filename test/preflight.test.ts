@@ -35,7 +35,7 @@ const policy = (over: Partial<PreflightPolicy> = {}): PreflightPolicy => ({
   ...over,
 });
 
-describe('runPreflight — single shared resolve', () => {
+describe('runPreflight, single shared resolve', () => {
   it('resolves the registry ONCE and feeds hints + age gate + advisory from that one result', async () => {
     const { client, calls } = countingRegistry();
     const result = await runPreflight([{ name: 'sharp', spec: '0.33.5' }], policy({ minReleaseAgeDays: 1, advisories: true }), {
@@ -103,7 +103,7 @@ describe('runPreflight — single shared resolve', () => {
   });
 });
 
-describe('suggestPins — concrete pin for each blocked package', () => {
+describe('suggestPins, concrete pin for each blocked package', () => {
   const violation = (name: string): ReleaseAgeViolation => ({ name, version: '1.3.0', publishedAt: new Date(SIX_HOURS_AGO), ageMs: 6 * 60 * 60 * 1000 });
 
   // 1.2.0 is aged-in; 1.3.0 (latest) is fresh. The pin must be 1.2.0.
@@ -132,7 +132,7 @@ describe('suggestPins — concrete pin for each blocked package', () => {
   });
 });
 
-describe('runPreflight — deep gate', () => {
+describe('runPreflight, deep gate', () => {
   const deepTree: LockfilePackage[] = [{ name: 'transitive', version: '1.0.0' }];
 
   it('gates the lockfile tree and reports deepCount; skips the direct resolve when nothing else needs it', async () => {
@@ -157,7 +157,7 @@ describe('runPreflight — deep gate', () => {
   it('flags a DEPRECATED transitive version over the deep tree (riskHints on, no age gate)', async () => {
     const deprecatedRegistry: RegistryClient = {
       async getPackument(name: string) {
-        return { name, versions: { '1.0.0': { deprecated: 'abandoned — do not use' } }, time: { '1.0.0': '2024-01-01T00:00:00.000Z' } } as Awaited<ReturnType<RegistryClient['getPackument']>>;
+        return { name, versions: { '1.0.0': { deprecated: 'abandoned, do not use' } }, time: { '1.0.0': '2024-01-01T00:00:00.000Z' } } as Awaited<ReturnType<RegistryClient['getPackument']>>;
       },
     };
     const result = await runPreflight([], policy({ riskHints: true, minReleaseAgeDays: 0, deep: true }), {

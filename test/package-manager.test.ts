@@ -42,7 +42,7 @@ describe('pmArgv', () => {
     expect(pmArgv('bun', 'add', ['zod'])).toEqual(['bun', 'add', '--exact', 'zod']);
   });
 
-  it('removes deps with each PM’s drop verb — npm `uninstall`, others `remove`, no exact defaulting', () => {
+  it('removes deps with each PM’s drop verb, npm `uninstall`, others `remove`, no exact defaulting', () => {
     expect(pmArgv('npm', 'remove', ['lodash'])).toEqual(['npm', 'uninstall', 'lodash']);
     expect(pmArgv('pnpm', 'remove', ['zod'])).toEqual(['corepack', 'pnpm', 'remove', 'zod']);
     expect(pmArgv('yarn', 'remove', ['react', 'react-dom'])).toEqual(['corepack', 'yarn', 'remove', 'react', 'react-dom']);

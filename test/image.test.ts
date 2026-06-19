@@ -151,7 +151,7 @@ describe('corepackPrepareStep', () => {
   });
 });
 
-describe('resolveBuildSpec — package manager baking', () => {
+describe('resolveBuildSpec, package manager baking', () => {
   function projectWith(pkg: Record<string, unknown>): string {
     const dir = mkdtempSync(path.join(tmpdir(), 'sbx-pm-'));
     writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));

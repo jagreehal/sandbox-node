@@ -73,7 +73,7 @@ describe('runCode', () => {
     expect(override?.network).toBe('none');
   });
 
-  it('runs TypeScript via the .mts entry (Node strips types — no tsx, no network)', async () => {
+  it('runs TypeScript via the .mts entry (Node strips types, no tsx, no network)', async () => {
     const { backend, captures } = fakeBackend();
     await runCode('const n: number = 2; console.log(n)', { language: 'ts' }, backend);
     const { plan, workspace } = only(captures);
@@ -95,7 +95,7 @@ describe('runCode', () => {
     expect(result.exitCode).toBe(124);
   });
 
-  it('flags timedOut on SIGKILL escalation (exit 137) — code that traps SIGTERM', async () => {
+  it('flags timedOut on SIGKILL escalation (exit 137), code that traps SIGTERM', async () => {
     const { backend } = fakeBackend({ result: { code: 137, stdout: '', stderr: '' }, delayMs: 40 });
     const result = await runCode("process.on('SIGTERM', () => {}); while (true) {}", { timeoutMs: 10 }, backend);
     expect(result.timedOut).toBe(true);

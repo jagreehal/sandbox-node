@@ -5,3 +5,5 @@ dist/
 .claude-sandbox/
 *.log
 .DS_Store
+
+___*

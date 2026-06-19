@@ -101,7 +101,7 @@ describe('ed25519 signed receipts', () => {
     expect(keyFingerprint(publicKeyPem)).toBe(expected);
   });
 
-  it('enforces a pinned fingerprint — a valid signature from the wrong key is rejected', () => {
+  it('enforces a pinned fingerprint, a valid signature from the wrong key is rejected', () => {
     const trusted = generateSigningKey();
     const attacker = generateSigningKey();
     const trustedFp = keyFingerprint(trusted.publicKeyPem);

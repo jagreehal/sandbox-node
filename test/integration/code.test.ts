@@ -38,14 +38,14 @@ describe.skipIf(!hasDocker)('runCode (docker integration)', () => {
     expect(result.durationMs).toBeLessThan(15_000);
   });
 
-  it('still times out code that traps SIGTERM — escalates to SIGKILL (exit 137)', async () => {
+  it('still times out code that traps SIGTERM, escalates to SIGKILL (exit 137)', async () => {
     const result = await runCode("process.on('SIGTERM', () => {});\nwhile (true) {}", { timeoutMs: 1500 });
     expect(result.timedOut).toBe(true);
     expect(result.exitCode).toBe(137); // 128 + SIGKILL — `timeout -k` had to escalate
     expect(result.durationMs).toBeLessThan(15_000);
   });
 
-  it('has no network by default — outbound connections fail', async () => {
+  it('has no network by default, outbound connections fail', async () => {
     const result = await runCode("try { await fetch('https://example.com'); console.log('REACHED'); } catch { console.log('BLOCKED'); }");
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe('BLOCKED');

@@ -83,13 +83,13 @@ async function resolvePublishablePorts(ports: string[]): Promise<string[]> {
   if (available.length === 1) {
     log.info(`port forwarded → ${endpointsFor(available)[0]!.url}`);
   } else if (available.length > 1) {
-    log.info(`dev ports forwarded to localhost: ${available.map(hostPortOf).join(', ')} — open the URL your dev server prints below`);
+    log.info(`dev ports forwarded to localhost: ${available.map(hostPortOf).join(', ')}; open the URL your dev server prints below`);
   }
   if (busy.length) {
-    log.warn(`host port ${busy.map(hostPortOf).join(', ')} already in use — skipped (set run.ports to map a different one)`);
+    log.warn(`host port ${busy.map(hostPortOf).join(', ')} already in use; skipped (set run.ports to map a different one)`);
   }
   if (conflicts.length) {
-    log.warn(`duplicate host port ignored: ${conflicts.map(hostPortOf).join(', ')} — each host port maps once (check run.ports / devPorts overlap)`);
+    log.warn(`duplicate host port ignored: ${conflicts.map(hostPortOf).join(', ')}; each host port maps once (check run.ports / devPorts overlap)`);
   }
   return available;
 }
@@ -130,7 +130,7 @@ export async function execute(
         opts.canary ? (logText) => canaryHits.push(...scanCanaryLog(logText, opts.canary!).map((h) => h.line)) : undefined,
       );
       if (canaryHits.length) {
-        log.error('CANARY TRIPPED — a planted honeytoken credential left the sandbox; treat this as a live exfiltration attempt', { lines: canaryHits.slice(0, 5) });
+        log.error('CANARY TRIPPED, a planted honeytoken credential left the sandbox; treat this as a live exfiltration attempt', { lines: canaryHits.slice(0, 5) });
       }
       if (denied.length) {
         if (!opts.capture) {
@@ -171,7 +171,7 @@ export async function execute(
       const foreignNative = findHostIncompatiblePackagesInWorkspace(workspaceRoot, hostPlatform());
       if (foreignNative.length) {
         log.info(
-          `${foreignNative.length} native package(s) target the Linux sandbox, not your ${process.platform} host — run project tools via sandbox (e.g. \`sandbox test\`, \`sandbox dev\`), or run your install on the host for native dev`,
+          `${foreignNative.length} native package(s) target the Linux sandbox, not your ${process.platform} host, run project tools via sandbox (e.g. \`sandbox test\`, \`sandbox dev\`), or run your install on the host for native dev`,
           { packages: foreignNative.slice(0, 8), truncated: foreignNative.length > 8 },
         );
       }

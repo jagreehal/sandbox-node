@@ -2,7 +2,7 @@
 
 Safer installs for everyday work and AI agents. Install scripts still work; your laptop secrets stay out.
 
-Your risky `npm install` runs in a throwaway box that can see your project and the npm registry — and nothing else.
+Your risky `npm install` runs in a throwaway box that can see your project and the npm registry, and nothing else.
 
 ```mermaid
 flowchart TB
@@ -23,7 +23,7 @@ flowchart TB
     style BOX fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
 ```
 
-Just add `sandbox` in front of the command you already run. Install-time package code (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token, cloud credentials, or editor/agent state unless you explicitly grant it. It auto-detects your package manager — npm, pnpm, yarn, or bun — and mirrors it.
+Just add `sandbox` in front of the command you already run. Install-time package code (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token, cloud credentials, or editor/agent state unless you explicitly grant it. It auto-detects your package manager (npm, pnpm, yarn, or bun) and mirrors it.
 
 ## Quickstart
 
@@ -31,9 +31,9 @@ Just add `sandbox` in front of the command you already run. Install-time package
 
 ```bash
 sandbox setup --vibe         # one-button setup: config, backend check, build images
-sandbox npm install          # install deps — lifecycle scripts are contained
+sandbox npm install          # install deps; lifecycle scripts are contained
 sandbox pnpm add zod         # add a dependency (saved exact by default)
-sandbox pnpm remove zod      # drop one — uninstall scripts run in the box, not your home
+sandbox pnpm remove zod      # drop one; uninstall scripts run in the box, not your home
 sandbox dev                  # run dev/start/serve with native PM syntax
 sandbox test                 # run any non-colliding package.json script
 sandbox x vite               # one-off tools, npx/bunx-style
@@ -43,7 +43,7 @@ Tired of typing the prefix? `sandbox path install` wires shell wrappers so a bar
 
 ## Works with
 
-Every package manager and the verbs you already use — put `sandbox` in front of any of them:
+Every package manager and the verbs you already use. Put `sandbox` in front of any of them:
 
 | | install | add / remove | update / dedupe | audit | run / exec |
 | --- | --- | --- | --- | --- | --- |
@@ -52,24 +52,24 @@ Every package manager and the verbs you already use — put `sandbox` in front o
 | **yarn** | `install` · bare `yarn` | `add` · `remove` | `up` · `upgrade` · `dedupe` | `audit` | `<script>` · `dlx` |
 | **bun** | `install` | `add` · `remove` | `update` | `audit` | `<script>` · `bunx` · `x` |
 
-Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgrade`) is run through the same supply-chain gates — release-age cooldown, OSV malware check, and risk hints — before the bytes are fetched. Removing a dependency fetches nothing new, so it skips the gates but is still fully contained.
+Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgrade`) passes through the same supply-chain gates (release-age cooldown, OSV malware check, and risk hints) before the bytes are fetched. Removing a dependency fetches nothing new, so it skips the gates but stays contained.
 
 ## Protected by default
 
-- **Credentials** — no `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
-- **Persistence** — `.git`, `.github`, `.husky`, `.claude`, `.vscode`, …, and `package.json` are read-only, so an install can't plant auto-running hooks.
-- **Egress** — default-deny; install reaches only the registry hosts in `egress.allow`.
-- **Capabilities** — `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
+- **Credentials.** No `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
+- **Persistence.** `.git`, `.github`, `.husky`, `.claude`, `.vscode`, …, and `package.json` are read-only, so an install can't plant auto-running hooks.
+- **Egress.** Default-deny; install reaches only the registry hosts in `egress.allow`.
+- **Capabilities.** `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
 
 ## NOT protected by default
 
-> ⚠️ **Your source tree stays writable.** Package managers need a writable root, so a malicious dependency can still overwrite files in `src/` during install (you'll see it in `git diff`). `sandbox` blocks credential theft, persistence, and exfiltration — not source edits. Use `--frozen` for a read-only tree (npm, yarn, bun; pnpm keeps a writable root), and review `git diff` after installing from an untrusted source.
+> ⚠️ **Your source tree stays writable.** Package managers need a writable root, so a malicious dependency can still overwrite files in `src/` during install (you'll see it in `git diff`). `sandbox` blocks credential theft, persistence, and exfiltration. It leaves source edits to you. Use `--frozen` for a read-only tree (npm, yarn, bun; pnpm keeps a writable root), and review `git diff` after installing from an untrusted source.
 
 | What | How to lock it down |
 | --- | --- |
 | Your **source files** | `--frozen` makes the whole tree read-only (every PM except pnpm) |
 | Anything you **grant** (ssh-agent, paths, env, network) | grant the minimum; prefer ssh-agent over key files |
-| **Network in `run`/`shell`** | `run.network` defaults to `none`; widen deliberately with `--dev` |
+| **Network in `run`/`shell`** | `run.network` defaults to `none`; widen it with `--dev` |
 
 ## Common commands
 
@@ -80,7 +80,7 @@ Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgra
 | `sandbox dev` · `sandbox test` · `sandbox x <tool>` | Run a dev server, a script, or a one-off tool in the box. |
 | `sandbox path install` | Route bare `npm/pnpm/yarn/bun` + `npx` through the sandbox in your shell. |
 | `sandbox doctor [--fix]` | Check config, package manager, backend, daemon, and image state. |
-| `sandbox check [pkg \| file.json]` | Audit deps **before** you install them (npq-style) — OSV advisories, typosquats, fresh/deprecated versions. No container, no Docker. Bare `check` audits the whole project (root + every workspace); pass a `package.json` to audit a specific manifest. |
+| `sandbox check [pkg \| file.json]` | Audit deps **before** you install them: OSV advisories, typosquats, fresh/deprecated versions. No container, no Docker. Bare `check` audits the whole project (root + every workspace); pass a `package.json` to audit a specific manifest. |
 | `sandbox scan` | Retroactive malware sweep over your committed lockfile (CI/cron). |
 | `sandbox secrets [path]` | Offline scan for committed credentials (CI tripwire). |
 | `sandbox verify` | CI gate: fail unless the repo commits a real, un-loosened sandbox boundary. |
@@ -113,8 +113,8 @@ The first run builds the sandbox image and the egress-proxy image (or run `sandb
 
 ### Requirements
 
-- **Docker** — Docker Desktop, OrbStack, or any Docker-compatible engine (Podman works via `--backend podman`). It's the only dependency; the CLI builds its own images on first run.
-- **macOS or Linux** — on Windows, run inside WSL2 with Docker Desktop (the tool uses a POSIX shell and Unix paths).
+- **Docker.** Docker Desktop, OrbStack, or any Docker-compatible engine (Podman works via `--backend podman`). It's the only dependency; the CLI builds its own images on first run.
+- **macOS or Linux.** On Windows, run inside WSL2 with Docker Desktop (the tool uses a POSIX shell and Unix paths).
 - **Node 20 or newer.**
 
 ## Learn more
@@ -129,4 +129,4 @@ The **[full reference](docs/reference.md)** covers everything else: isolating th
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE) and [SECURITY.md](SECURITY.md).
+Apache-2.0. See [LICENSE](LICENSE) and [SECURITY.md](SECURITY.md).

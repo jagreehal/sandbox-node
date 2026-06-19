@@ -26,7 +26,7 @@ queries the registry + OSV. Reports findings and exits non-zero when the matchin
 been blocked. `check` always queries OSV (so advisories show without `--fail-on-advisory`; that flag
 only makes them *block*). `preflight` is the command-mirroring sibling.
 
-- `sandbox check express lodash@4` — bare package names (the friendly npq-style form)
+- `sandbox check express lodash@4` — bare package names (the direct package-name form)
 - `sandbox check` — the whole project: root manifest **+ every workspace package.json**, deduped
 - `sandbox check ./packages/api/package.json` — the deps in a specific manifest (workspace-aware for
   a `package.json`; relative paths resolve from the current directory)

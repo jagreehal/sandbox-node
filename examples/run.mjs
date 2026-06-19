@@ -12,6 +12,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '..', 'dist', 'cli.mjs');
 const real = process.argv.includes('--real');
 const sentinel = path.join('node_modules', '.sandbox-example-probe-ran');
+const sandboxEnv = { ...process.env };
+delete sandboxEnv.SANDBOX_OFF;
 
 if (!existsSync(cli)) {
   console.error(`sandbox CLI not built — run \`npm run build\` first (looked for ${cli})`);
@@ -37,12 +39,12 @@ function exampleDir(dir) {
 }
 
 function plan(dir) {
-  const out = execFileSync('node', [cli, '--json', dir, 'install'], { cwd: path.join(here, dir), encoding: 'utf8' });
+  const out = execFileSync('node', [cli, '--json', dir, 'install'], { cwd: path.join(here, dir), encoding: 'utf8', env: sandboxEnv });
   return JSON.parse(out);
 }
 
 function planCommand(cwdRel, argv, globals = ['--json']) {
-  const out = execFileSync('node', [cli, ...globals, ...argv], { cwd: exampleDir(cwdRel), encoding: 'utf8' });
+  const out = execFileSync('node', [cli, ...globals, ...argv], { cwd: exampleDir(cwdRel), encoding: 'utf8', env: sandboxEnv });
   return JSON.parse(out);
 }
 
@@ -77,7 +79,7 @@ function assertPlan(dir, lead, egress) {
 }
 
 function frozenPlan(dir) {
-  const out = execFileSync('node', [cli, '--json', '--frozen', dir, 'install'], { cwd: exampleDir(dir), encoding: 'utf8' });
+  const out = execFileSync('node', [cli, '--json', '--frozen', dir, 'install'], { cwd: exampleDir(dir), encoding: 'utf8', env: sandboxEnv });
   return JSON.parse(out);
 }
 
@@ -145,8 +147,8 @@ function assertWorkspaceReal() {
   const cwd = exampleDir(path.join('workspace', 'apps', 'web'));
   const root = exampleDir('workspace');
   cleanWorkspaceArtifacts();
-  execFileSync('node', [cli, '--risk', 'off', 'npm', 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  const runOut = execFileSync('node', [cli, 'npm', 'run', 'whereami'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('node', [cli, '--risk', 'off', 'npm', 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sandboxEnv });
+  const runOut = execFileSync('node', [cli, 'npm', 'run', 'whereami'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sandboxEnv });
   const problems = [];
   if (!existsSync(path.join(root, 'package-lock.json'))) problems.push('workspace install did not create the root package-lock.json');
   if (!existsSync(path.join(root, 'node_modules', 'is-odd'))) problems.push('workspace install did not populate root node_modules/is-odd');
@@ -157,7 +159,7 @@ function assertWorkspaceReal() {
 function assertRealInstall(dir, frozenLead, frozenRootReadonly, frozenLockfile) {
   const cwd = exampleDir(dir);
   cleanRealArtifacts(dir);
-  const output = execFileSync('node', [cli, '--risk', 'off', dir, 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const output = execFileSync('node', [cli, '--risk', 'off', dir, 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sandboxEnv });
 
   const problems = [];
   if (!existsSync(path.join(cwd, 'node_modules', 'is-odd'))) problems.push('registry dependency is-odd was not installed');
@@ -170,7 +172,7 @@ function assertRealInstall(dir, frozenLead, frozenRootReadonly, frozenLockfile) 
   const { problems: frozenPlanProblems } = assertFrozenPlan(dir, frozenLead, frozenRootReadonly, frozenLockfile);
   problems.push(...frozenPlanProblems);
 
-  const frozenOutput = execFileSync('node', [cli, '--risk', 'off', '--frozen', dir, 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const frozenOutput = execFileSync('node', [cli, '--risk', 'off', '--frozen', dir, 'install'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sandboxEnv });
   return { problems, output, frozenOutput, probeRan, bunBlocked };
 }
 

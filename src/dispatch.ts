@@ -37,7 +37,7 @@ const UPDATE_VERBS: Record<PackageManager, Set<string>> = {
 
 /**
  * `dedupe` reorganises the installed tree to share versions. It re-resolves against the registry to
- * find dedupable versions, so it's install-class (registry egress) — a no-network `run` can't do it.
+ * find dedupable versions, so it's install-class (registry egress), a no-network `run` can't do it.
  * It rides the `update` model (it can pull newer in-range versions, same as an update). bun has no
  * dedupe; yarn's lives in Berry. npm also spells it `ddp`.
  */
@@ -136,6 +136,36 @@ export function routePassthrough(argv: string[]): Route | undefined {
   if (leader in PM_LEADERS) return routePm(PM_LEADERS[leader]!, rest);
   if (RUN_LEADERS.has(leader)) return { model: 'run', argv };
   return undefined;
+}
+
+/** Package specifiers and bin names that mean "the sandbox CLI itself". */
+const SELF_PACKAGE = '@jagreehal/sandbox-node';
+
+/** True for `@jagreehal/sandbox-node`, `@jagreehal/sandbox-node@latest`, `sandbox-node@1.2.3`, etc. */
+function isSelfPackageToken(token: string): boolean {
+  const at = token.lastIndexOf('@');
+  const name = at > 0 ? token.slice(0, at) : token; // keep the scope's leading '@'; drop any version suffix
+  return name === SELF_PACKAGE || name === 'sandbox-node';
+}
+
+/** Fetch-and-run runners (npx-family) — the surface that can end up wrapping our OWN CLI. */
+const SELF_RUNNERS = new Set(['npx', 'bunx', 'pnpx', 'dlx', 'exec', 'x']);
+
+/**
+ * Don't sandbox sandbox. With `sandbox path install` active, the shell routes `npx` through us, so
+ * `npx @jagreehal/sandbox-node check lodash` arrives as `sandbox npx @jagreehal/sandbox-node check
+ * lodash` — which would otherwise fetch-and-run our OWN CLI inside a network-less container and die
+ * with a DNS error, never reaching `check`. Detect that shape and unwrap it to the bare subcommand
+ * (`check lodash`), which the already-running CLI runs directly. Returns the unwrapped argv, or
+ * undefined when this isn't a self-invocation.
+ */
+export function unwrapSelfInvocation(argv: string[]): string[] | undefined {
+  const runnerAt = argv.findIndex((t) => SELF_RUNNERS.has(t));
+  if (runnerAt === -1) return undefined;
+  let i = runnerAt + 1;
+  while (i < argv.length && argv[i]!.startsWith('-')) i++; // skip runner flags like -y / --yes
+  if (i >= argv.length || !isSelfPackageToken(argv[i]!)) return undefined;
+  return argv.slice(i + 1).filter((t) => t !== '--'); // drop a `--` separator (e.g. `npm exec pkg -- args`)
 }
 
 /**

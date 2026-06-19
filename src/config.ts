@@ -16,7 +16,7 @@ export type NetworkMode = z.infer<typeof NetworkMode>;
  * a typo into a readable message instead of Zod's terse "expected string, received number".
  */
 export const PortSpec = z.union([z.string(), z.number().int().positive()]).refine(isValidPortSpec, {
-  message: 'invalid port — use a number or "PORT", "HOST:CONTAINER", or "IP:HOST:CONTAINER"',
+  message: 'invalid port, use a number or "PORT", "HOST:CONTAINER", or "IP:HOST:CONTAINER"',
 });
 
 export const SandboxConfigSchema = z
@@ -327,7 +327,7 @@ function boundaryLooseningWarnings(eff: SandboxConfig, base: SandboxConfig): str
   const added = (a: string[], b: string[]) => a.filter((x) => !b.includes(x));
   // The strongest loosening there is: a personal layer turning containment OFF entirely. Flag it
   // loudest, since every other boundary check below is moot once commands run on the host.
-  if (eff.off && !base.off) w.push('containment DISABLED (off:true) by a personal layer — every command runs on the host with NO sandbox');
+  if (eff.off && !base.off) w.push('containment DISABLED (off:true) by a personal layer, every command runs on the host with NO sandbox');
   if (NET_RANK[eff.install.network] > NET_RANK[base.install.network]) w.push(`install.network widened to '${eff.install.network}' (team config: '${base.install.network}')`);
   if (NET_RANK[eff.run.network] > NET_RANK[base.run.network]) w.push(`run.network widened to '${eff.run.network}' (team config: '${base.run.network}')`);
   const egress = added(eff.egress.allow, base.egress.allow);
@@ -345,7 +345,7 @@ function boundaryLooseningWarnings(eff: SandboxConfig, base: SandboxConfig): str
   if (eff.install.minReleaseAgeDays < base.install.minReleaseAgeDays) w.push(`install.minReleaseAgeDays lowered to ${eff.install.minReleaseAgeDays} (team config: ${base.install.minReleaseAgeDays})`);
   const droppedFeeds = base.install.malwareFeeds.filter((f) => !eff.install.malwareFeeds.includes(f));
   if (droppedFeeds.length) w.push(`install.malwareFeeds dropped ${droppedFeeds.join(', ')} (removed by a personal layer)`);
-  if (eff.build.customDockerfileUnsafe && !base.build.customDockerfileUnsafe) w.push('build.customDockerfileUnsafe set by a personal layer — the sandbox boundary is no longer verified');
+  if (eff.build.customDockerfileUnsafe && !base.build.customDockerfileUnsafe) w.push('build.customDockerfileUnsafe set by a personal layer, the sandbox boundary is no longer verified');
   return w;
 }
 

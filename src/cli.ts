@@ -15,10 +15,11 @@ import { resolveBuildSpec } from './image.js';
 import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
 import { renderPlanSummary } from './dryrun.js';
-import { isGlobalInstall, routePassthrough, type Route } from './dispatch.js';
+import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
-import { execute } from './execute.js';
-import { classifyCommand } from './tamper.js';
+import { execute, type ExecuteResult } from './execute.js';
+import { quiet } from './exec.js';
+import { classifyCommand, containedSuccessLine } from './tamper.js';
 import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
 import { ensureLocalConfigIgnored, runInit } from './init.js';
 import { log } from './log.js';
@@ -34,9 +35,9 @@ import { runDelta } from './delta.js';
 import { feedCacheDir, loadKnownBad, PROJECT_ADVISORY_NAME, updateFeeds, type KnownBadHit } from './known-bad.js';
 import { scanSecrets, type SecretFinding } from './secrets.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
-import { execPackageTargets, parseLockfilePackages, parsePackageTargets, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
+import { execPackageTargets, parseLockfilePackages, parsePackageTargets, planRiskHintLog, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
 import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
-import { runSetup } from './setup.js';
+import { backendDownGuidance, runSetup } from './setup.js';
 import { makeCanary } from './canary.js';
 import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
@@ -83,23 +84,23 @@ interface Globals {
 
 const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
 
-const HELP = `sandbox — put it in front of the npm/pnpm/yarn/bun command you already run
+const HELP = `sandbox: put it in front of the npm/pnpm/yarn/bun command you already run
 
 Usage: sandbox [globals] <command> [args]
 
-Just add "sandbox" in front — same commands, fewer secrets exposed:
+Just add "sandbox" in front. Same commands, fewer secrets exposed:
   sandbox dev                 auto-detect PM, run dev/start/serve with full network + dev ports
   sandbox test                auto-detect PM, run a package.json script natively
   sandbox script build        run a specific package.json script, even if it collides with a sandbox command
   sandbox setup --vibe         one-button setup for vibe/dev work
   sandbox npm install          install deps in the sandbox (lifecycle scripts contained)
   sandbox pnpm add zod         add a dependency (saved exact by default)
-  sandbox npm update           update deps — gated + sandboxed like install (pnpm up / yarn upgrade too)
+  sandbox npm update           update deps, gated + sandboxed like install (pnpm up / yarn upgrade too)
   sandbox npm audit fix        remediate vulnerabilities under install-class isolation
   sandbox npm audit signatures verify registry signatures/provenance for installed packages
   sandbox npm run dev          run a script (dev server, tests, build, …)
   sandbox npx vite             run a one-off tool (or the shorthand: sandbox x vite)
-Works with npm, pnpm, yarn, and bun — install/ci/add/update, npm audit fix, pnpm audit --fix,
+Works with npm, pnpm, yarn, and bun: install/ci/add/update, npm audit fix, pnpm audit --fix,
 report-only audit commands, \`npm audit signatures\`, \`pnpm audit signatures\`, and any run/exec
 script. Your SSH keys, npm token, cloud creds, and editor/agent state stay out unless you grant
 them.
@@ -119,7 +120,7 @@ Sandbox commands:
                        your git-ignored personal override). off → installs run on the host here;
                        on → back in the sandbox. The per-project twin of SANDBOX_OFF=1.
   path [install|uninstall|status|print]   install shell wrappers (zsh/bash/fish/pwsh) so a bare
-                       npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically —
+                       npm/pnpm/yarn/bun install + npx/bunx route through sandbox automatically,
                        the human equivalent of the agent hook. Also wires tab-completion. Bypass
                        once with 'command npm ...' or a whole shell with SANDBOX_OFF=1.
   completion <shell>   print a standalone tab-completion script for zsh|bash|fish (commands,
@@ -129,7 +130,7 @@ Sandbox commands:
   approve-builds [pkg]  approve dependency build scripts pnpm left ignored (writes allowBuilds +
                        onlyBuiltDependencies, then re-installs). No args = approve all pending;
                        --deny records the opposite. Install also prompts on a TTY automatically.
-  check [pkg... | file.json | pm cmd]   audit packages BEFORE you install them — npq-style.
+  check [pkg... | file.json | pm cmd]   audit packages BEFORE you install them. A read-only review pass.
                        No container, no Docker: queries the registry + OSV advisory DB and prints
                        every finding (malware, vulns, typosquats, fresh/deprecated versions, …).
                          sandbox check express lodash@4      bare names (the common case)
@@ -142,7 +143,7 @@ Sandbox commands:
   preflight [pm cmd]   alias of check that mirrors a specific install command's gates.
   scan                 RETROACTIVE malware sweep: re-query OSV for the versions in your committed
                        lockfile and exit non-zero if any installed package is NOW flagged as
-                       malware. Catches deps that turned malicious AFTER you installed them — the
+                       malware. Catches deps that turned malicious AFTER you installed them, the
                        gap install-time gating can't cover. No container needed. Run in CI/cron.
   delta [--base <ref>] gate ONLY the dependency changes a PR introduces: diff the lockfile against
                        <ref> (default origin/main; or --base-lockfile <path>) and run the release-age,
@@ -150,7 +151,7 @@ Sandbox commands:
                        --min-release-age / --fail-on-advisory. Fast, low-noise PR check.
   secrets [path]       offline scan for committed credentials (API keys, tokens, private keys, db
                        URLs). Read-only, no container; exits non-zero on any finding (CI tripwire).
-                       Matched values are redacted — reports where, never the secret. Defaults to cwd.
+                       Matched values are redacted. Reports where, never the secret. Defaults to cwd.
                        ~40 provider patterns, checksum/decode validation (Luhn, JWT) to cut noise,
                        plus an entropy fallback for secret-ish values with no known shape.
   demo                 run real supply-chain attacks (credential theft, persistence, IMDS pivot,
@@ -159,7 +160,7 @@ Sandbox commands:
   feeds <update|list>  manage malware FEEDS (install.malwareFeeds): \`update\` fetches + caches them so
                        the install-time blocklist check stays offline; \`list\` shows configured/cached
                        feeds. A package on a feed (or in sandbox.advisories.json) ALWAYS blocks installs.
-  upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates) —
+  upgrade [--write]    move declared dependency RANGES to newer versions (npm-check-updates),
                        NOT just within the range (that's \`sandbox npm update\`). Your release-age
                        gate drives ncu's --cooldown automatically, the proposed versions go through
                        the SAME gates as install, and --write rewrites package.json then installs in
@@ -168,7 +169,7 @@ Sandbox commands:
                        --fix runs the safe remedies (currently: rebuild an absent/stale image).
   build                build (or rebuild) the sandbox + egress-proxy images
   verify [--scan]      exit non-zero unless this repo commits a real sandbox boundary and
-       [--secrets]     no personal layer has loosened it — the CI gate behind the badge.
+       [--secrets]     no personal layer has loosened it, the CI gate behind the badge.
        [--sign]        --scan also runs the retroactive malware sweep (so the badge means
                        "boundary intact AND no installed dep is currently flagged as malware");
                        --secrets also fails if a credential is committed in the repo;
@@ -182,20 +183,20 @@ Sandbox commands:
                        Set SANDBOX_AUDIT_LOG=<path> on any run to append tamper-evident events
   badge [--workflow F] print a markdown "sandboxed" badge. Bare = static provenance badge;
                        --workflow sandbox.yml = the CI-backed verified badge (--repo to override)
-  devcontainer init    generate a .devcontainer/ from sandbox.config.json — the persistent
+  devcontainer init    generate a .devcontainer/ from sandbox.config.json, the persistent
                        (per-session) form of the same policy: run the agent + editor INSIDE
                        the jail, with the same egress allowlist. Add --force to overwrite.
 
-Expert (explicit) commands — same models the pass-through maps onto:
+Expert (explicit) commands, the same models the pass-through maps onto:
   install [pm-args]    install deps. Persistence paths (.git/.github/.husky/.claude/…)
                        and package.json are read-only; root stays writable. No host
                        creds. Egress default-deny (allowlist: registry only).
-  add <pkg...>         add dependency(ies) — writes package.json, saved as exact versions
+  add <pkg...>         add dependency(ies); writes package.json, saved as exact versions
                        by default
-  remove <pkg...>      drop dependency(ies) — writes package.json like add, but fetches
+  remove <pkg...>      drop dependency(ies); writes package.json like add, but fetches
                        nothing new (no supply-chain gate). Pass-through too: sandbox npm
                        uninstall lodash · sandbox pnpm remove zod · sandbox bun rm left-pad
-  x <tool> [args]      run a package binary npx/bunx-style (local-first, fetches as fallback) —
+  x <tool> [args]      run a package binary npx/bunx-style (local-first, fetches as fallback),
                        the shorthand for sandbox npx <tool> / sandbox bunx <tool>
   run -- <cmd...>      run a command in the container (network: none by default)
   shell                interactive shell in the container
@@ -215,7 +216,7 @@ Globals (before the command):
                        committed lockfile.
   --fail-on-egress     exit non-zero if the proxy blocked any egress (CI tripwire)
   --canaries           plant fake AWS/Stripe/Slack credentials in the install container and watch
-       --no-canaries   the egress proxy for them — if a planted token leaves the box it's caught as
+       --no-canaries   the egress proxy for them; if a planted token leaves the box it's caught as
                        an exfiltration attempt (fails the run). Allowlist egress only; on by default
                        in the strict/agent presets. --no-canaries turns it off for one run.
   --risk <off|basic|thorough>  registry risk hints: off; basic (packument-only: typosquat,
@@ -241,9 +242,9 @@ Globals (before the command):
   --full-network       scarier escape hatch: run this once with full network (no egress
                        allowlist); with run/shell it also enables common dev ports
   --allow-all-builds   approve every ignored dependency build script without prompting (CI/agents)
-  --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts —
+  --allow-build-hosts  widen egress (this run) to the curated native-build/release hosts:
                        Node headers, GitHub releases, Prisma/Playwright/Cypress/Electron binaries
-  --dry-run            preview what would be mounted, allowed, and run — then stop (human-readable)
+  --dry-run            preview what would be mounted, allowed, and run; then stop (human-readable)
   --json               print the resolved execution plan as JSON instead of running it
   --no-update-check    skip the once-a-day "new version available" check for this run
                        (also off via NO_UPDATE_NOTIFIER=1, CI=1, or updateCheck:false in config)
@@ -388,14 +389,14 @@ function sandboxOff(config: SandboxConfig): boolean {
 function runOnHost(argv: string[], cwd: string, globals: Globals): number {
   const reason = config_off_reason();
   if (globals.dryRun) {
-    console.log(`sandbox: OFF (${reason}) — would run on the host, no container:\n  ${argv.join(' ')}`);
+    console.log(`sandbox: OFF (${reason}), would run on the host, no container:\n  ${argv.join(' ')}`);
     return 0;
   }
   if (globals.json) {
     console.log(JSON.stringify({ off: true, reason, host: true, argv }, null, 2));
     return 0;
   }
-  log.warn(`sandbox is OFF (${reason}) — running on the host without containment: ${argv.join(' ')}`);
+  log.warn(`sandbox is OFF (${reason}), running on the host without containment: ${argv.join(' ')}`);
   const [program, ...rest] = argv;
   const result = spawnSync(program!, rest, { cwd, stdio: 'inherit' });
   if (result.error) fail(`could not run '${program}' on the host: ${result.error.message}`);
@@ -427,11 +428,24 @@ function hostCommandFor(cmd: string, args: string[], route: Route): string[] {
   }
 }
 
+/**
+ * After a contained run throws (usually a cryptic "failed to build" plus a raw daemon error), work out
+ * whether the real cause is the container runtime being missing or its daemon being down — the most
+ * common first-run faceplant — and return the same friendly guidance `doctor`/`setup` give. Returns
+ * undefined when the backend looks healthy, so an unrelated error surfaces unchanged. Probes only on
+ * the failure path, so a healthy run pays nothing.
+ */
+async function explainBackendDown(bin: string, backend: 'docker' | 'podman'): Promise<string[] | undefined> {
+  const installed = (await quiet(bin, ['--version'])) === 0;
+  const daemonUp = installed && (await quiet(bin, ['info'])) === 0;
+  return backendDownGuidance({ installed, daemonUp }, backend);
+}
+
 /** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
 function requireLockfileForFrozen(facts: ProjectFacts, frozen: boolean): void {
   if (frozen && !facts.hasLockfile) {
     const lf = lockfileName(facts.pm);
-    fail(`reproducible install needs a committed ${lf} — run \`sandbox ${facts.pm} install <pkg>\` to create one, or drop --frozen`);
+    fail(`reproducible install needs a committed ${lf}, run \`sandbox ${facts.pm} install <pkg>\` to create one, or drop --frozen`);
   }
 }
 
@@ -508,7 +522,7 @@ function depsFromManifestArg(file: string, cwd: string): string[] {
 }
 
 /**
- * The route `sandbox check`/`preflight` should audit. npq-style ergonomics: a `.json` file argument
+ * The route `sandbox check`/`preflight` should audit. Friendly ergonomics: a `.json` file argument
  * audits the dependencies declared in that manifest (`check ./packages/api/package.json`, monorepo
  * roots expand to every workspace); bare package names are the common case (`check express lodash@4`
  * → an add surface); a leading package manager means the caller spelled the whole command (`check npm
@@ -561,35 +575,13 @@ function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, 
   }
 }
 
-function formatRiskPackage(hint: RiskHint): string {
-  return `${hint.package}${hint.version ? `@${hint.version}` : ''}`;
-}
-
-function riskDetailLine(hint: RiskHint): string {
-  if (hint.code === 'bin_exposed') return `adds bin: ${hint.detail.bin}`;
-  if (hint.code === 'recent_version') return hint.detail.severity === 'strong' ? `!! ${hint.message}` : hint.message;
-  // High-signal codes (typosquat, provenance regression, maintainer takeover, expired domain) are
-  // error-level — flag them with the same `!!` emphasis as a very-fresh version.
-  return hint.level === 'error' ? `!! ${hint.message}` : hint.message;
-}
-
-function logRiskHints(targets: RiskTarget[], allHints: RiskHint[]): void {
-  if (targets.length) log.info(`checked ${targets.length} package${targets.length === 1 ? '' : 's'} for registry risk hints`);
-  const hints = allHints.filter((h) => h.code !== 'deprecated'); // deprecated has its own gate/message
-  if (!hints.length) return;
-  log.warn(`${hints.length} risk hint${hints.length === 1 ? '' : 's'}`);
-  const grouped = new Map<string, RiskHint[]>();
-  for (const hint of hints) {
-    const key = formatRiskPackage(hint);
-    grouped.set(key, [...(grouped.get(key) ?? []), hint]);
-  }
-  for (const [pkg, pkgHints] of grouped) {
-    const level = pkgHints.some((hint) => hint.level === 'error') ? 'error' : 'warn';
-    const lines = [pkg, ...pkgHints.map((hint) => `  ${riskDetailLine(hint)}`)];
-    if (level === 'error') log.error(lines.join('\n'));
-    else log.warn(lines.join('\n'));
-  }
-  log.info('continuing inside containment');
+/**
+ * Emit the registry risk-hint report. The decision (what to print, at what level, and the
+ * invisible-when-clean behaviour) lives in {@link planRiskHintLog} so it stays testable; this just
+ * routes each line to the matching logger method.
+ */
+function logRiskHints(targets: RiskTarget[], allHints: RiskHint[], opts: { contained: boolean } = { contained: true }): void {
+  for (const { level, text } of planRiskHintLog(targets.length, allHints, opts)) log[level](text);
 }
 
 /**
@@ -650,7 +642,7 @@ function logReleaseAgeBlock(violations: ReleaseAgeViolation[], minDays: number, 
     }),
     'freshly-published versions are the supply-chain worm window. Options:',
     // For a bare reproduce-the-lockfile install, the right tool is the delta gate — lead with it.
-    ...(reproduce ? ['  • these are existing dependencies, not new ones — review only what a change introduces: `sandbox delta` (diffs the lockfile against origin/main, skipping versions already committed)'] : []),
+    ...(reproduce ? ['  • these are existing dependencies, not new ones, review only what a change introduces: `sandbox delta` (diffs the lockfile against origin/main, skipping versions already committed)'] : []),
     suggestions.length ? '  • pin the suggested older version above' : '  • pin a known-good older version',
     '  • wait until it ages past the threshold, then retry',
     '  • override this once: add --min-release-age 0 before the command',
@@ -687,10 +679,10 @@ function logAdvisoryHits(hits: AdvisoryHit[]): void {
     const label = hasMalware(name) ? 'KNOWN MALWARE' : 'advisory';
     if (group.length === 1) {
       const h = group[0]!;
-      log[level](`${h.name}@${h.version} — ${label} ${fmtIds(h)}`);
+      log[level](`${h.name}@${h.version}, ${label} ${fmtIds(h)}`);
     } else {
       const header = `${name} (${group.length} version${group.length === 1 ? '' : 's'})`;
-      const items = group.sort((a, b) => a.version.localeCompare(b.version)).map((h) => `  ${h.version} — ${fmtIds(h)}`);
+      const items = group.sort((a, b) => a.version.localeCompare(b.version)).map((h) => `  ${h.version}, ${fmtIds(h)}`);
       log[level]([header, ...items].join('\n'));
     }
   }
@@ -710,7 +702,7 @@ function logScanSummary(counts: AdvisorySeverityCounts, totalPackages: number, s
 /** Generate an actionable fix line for a package. */
 function formatFixLine(name: string, hit: AdvisoryHit, pm: PackageManager): string | undefined {
   if (hit.malware) {
-    return `  → ${pm} remove ${name}@${hit.version} — flagged as malware`;
+    return `  → ${pm} remove ${name}@${hit.version}, flagged as malware`;
   }
   // Gather fix versions across all advisories (earliest >= current stable version wins)
   let bestFix: string | undefined;
@@ -847,7 +839,7 @@ async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string)
     return blocked ? 1 : 0;
   }
   if (result.lockfileMissing) {
-    log.warn(`scan: no parseable lockfile for ${pm} — nothing to scan (commit a lockfile; bun has no parser yet)`);
+    log.warn(`scan: no parseable lockfile for ${pm}, nothing to scan (commit a lockfile; bun has no parser yet)`);
     return 0;
   }
 
@@ -869,11 +861,11 @@ async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string)
   if (result.hits.length) logFixCommands(result.hits, pm);
 
   if (blocked) {
-    if (result.malware.length) log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV — remove or upgrade them (scanned ${result.scanned})`);
+    if (result.malware.length) log.error(`scan: ${result.malware.length} installed package(s) are NOW flagged as malware in OSV, remove or upgrade them (scanned ${result.scanned})`);
     if (result.knownBadHits.length) log.error(`scan: ${result.knownBadHits.length} installed package(s) match your blocklist/feeds (scanned ${result.scanned})`);
     return 1;
   }
-  log.info(`scan: clean — no installed package is currently flagged as malware or blocklisted (scanned ${result.scanned})`);
+  log.info(`scan: clean, no installed package is currently flagged as malware or blocklisted (scanned ${result.scanned})`);
   return 0;
 }
 
@@ -881,8 +873,8 @@ async function runScanCommand(globals: Globals, pm: PackageManager, cwd: string)
 function logKnownBadHits(hits: KnownBadHit[]): void {
   if (!hits.length) return;
   const lines = [
-    `blocked by your blocklist — ${hits.length} package(s) are listed as known-bad:`,
-    ...hits.map((h) => `  ${h.name}@${h.version} [${h.severity}] — ${h.reason} (source: ${h.source})`),
+    `blocked by your blocklist, ${hits.length} package(s) are listed as known-bad:`,
+    ...hits.map((h) => `  ${h.name}@${h.version} [${h.severity}], ${h.reason} (source: ${h.source})`),
     'options:',
     '  • remove or pin a different version of the package(s) above',
     `  • if this is a false positive, edit the matching entry in ${PROJECT_ADVISORY_NAME} (or your malware feed)`,
@@ -953,14 +945,14 @@ function blockExit(result: PreflightResult, ap: ActivePolicy): number | undefine
 
 function logDeprecatedGate(hints: RiskHint[], failOnDeprecated: boolean): number | undefined {
   if (!hints.length) return undefined;
-  const list = hints.map((h) => `  ${h.package}${h.version ? `@${h.version}` : ''} — ${h.message}`);
+  const list = hints.map((h) => `  ${h.package}${h.version ? `@${h.version}` : ''}, ${h.message}`);
   if (!failOnDeprecated) {
     log.warn(['deprecated version(s) allowed via --allow-deprecated:', ...list].join('\n'));
     return undefined;
   }
   log.error(
     [
-      'blocked: a maintainer-deprecated version would be installed — deprecated versions are abandoned and a supply-chain risk',
+      'blocked: a maintainer-deprecated version would be installed; deprecated versions are abandoned and a supply-chain risk',
       ...list,
       'options:',
       '  • upgrade to a non-deprecated version',
@@ -1058,7 +1050,7 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
 
   if (nothingToCheck(ap) && !knownBad.length) {
     if (globals.json) console.log(JSON.stringify({ blocked: false, gatesEnabled: false, checked: 0, hints: [], ageViolations: [], advisoryHits: [], knownBadHits: [], suggestions: [] }, null, 2));
-    else log.info('no supply-chain gates enabled — pass --min-release-age, --fail-on-advisory, and/or --fail-on-risk (or `sandbox init --preset strict`)');
+    else log.info('no supply-chain gates enabled, pass --min-release-age, --fail-on-advisory, and/or --fail-on-risk (or `sandbox init --preset strict`)');
     return 0;
   }
 
@@ -1077,10 +1069,10 @@ async function runPreflightCommand(globals: Globals, config: SandboxConfig, fact
   if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, ap.minReleaseAgeDays, facts.pm, suggestions, gatingExistingDeps(route));
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(deprecatedHints(result), ap.failOnDeprecated);
-  if (ap.riskHints) logRiskHints(targets, result.hints);
+  if (ap.riskHints) logRiskHints(targets, result.hints, { contained: false });
 
-  if (exit) log.error('preflight: would BLOCK this install — resolve the findings above, or re-run with an override flag');
-  else log.info('preflight: no blocking findings — safe to install');
+  if (exit) log.error('preflight: would BLOCK this install, resolve the findings above, or re-run with an override flag');
+  else log.info('preflight: no blocking findings, safe to install');
   return exit;
 }
 
@@ -1102,11 +1094,11 @@ function runSecretsCommand(globals: Globals, root: string): number {
     return findings.length ? 1 : 0;
   }
   if (!findings.length) {
-    log.info('secrets: clean — no credential patterns found in the scanned files');
+    log.info('secrets: clean, no credential patterns found in the scanned files');
     return 0;
   }
-  for (const f of findings) log.error(`${f.file}:${f.line} — ${f.label} (${f.ruleId}): ${f.redacted}`);
-  log.error(`secrets: ${findings.length} potential credential(s) found — rotate any real key, move it to an env var, and add the file to .gitignore`);
+  for (const f of findings) log.error(`${f.file}:${f.line}, ${f.label} (${f.ruleId}): ${f.redacted}`);
+  log.error(`secrets: ${findings.length} potential credential(s) found, rotate any real key, move it to an env var, and add the file to .gitignore`);
   return 1;
 }
 
@@ -1121,14 +1113,14 @@ async function runFeedsCommand(globals: Globals, config: SandboxConfig, args: st
   if (sub === 'list') {
     if (globals.json) console.log(JSON.stringify({ feeds, cacheDir: feedCacheDir() }, null, 2));
     else {
-      log.info(feeds.length ? `configured malware feeds (install.malwareFeeds):\n${feeds.map((f) => `  • ${f}`).join('\n')}` : 'no malware feeds configured — add URLs to install.malwareFeeds in sandbox.config.json');
+      log.info(feeds.length ? `configured malware feeds (install.malwareFeeds):\n${feeds.map((f) => `  • ${f}`).join('\n')}` : 'no malware feeds configured, add URLs to install.malwareFeeds in sandbox.config.json');
       log.info(`feed cache: ${feedCacheDir()}`);
     }
     return 0;
   }
   if (sub !== 'update') fail('usage: sandbox feeds <update|list>');
   if (!feeds.length) {
-    log.info('feeds: nothing to update — add malware feed URLs to install.malwareFeeds in sandbox.config.json first');
+    log.info('feeds: nothing to update, add malware feed URLs to install.malwareFeeds in sandbox.config.json first');
     return 0;
   }
   log.info(`feeds: fetching ${feeds.length} feed(s) …`);
@@ -1137,8 +1129,8 @@ async function runFeedsCommand(globals: Globals, config: SandboxConfig, args: st
     console.log(JSON.stringify({ results, cacheDir: feedCacheDir() }, null, 2));
   } else {
     for (const r of results) {
-      if (r.error) log.error(`  ✗ ${r.feed} — ${r.error}`);
-      else log.info(`  ✓ ${r.feed} — ${r.count} package(s) cached`);
+      if (r.error) log.error(`  ✗ ${r.feed}, ${r.error}`);
+      else log.info(`  ✓ ${r.feed}, ${r.count} package(s) cached`);
     }
   }
   return results.some((r) => r.error) ? 1 : 0;
@@ -1173,7 +1165,7 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
   const advisories = globals.failOnAdvisory ?? config.install.failOnAdvisory;
   const failOnDeprecated = globals.failOnDeprecated ?? config.install.failOnDeprecated;
   if (minReleaseAgeDays === 0 && !advisories) {
-    log.info('delta: no blocking gates enabled — pass --min-release-age and/or --fail-on-advisory (or `sandbox init --preset strict`)');
+    log.info('delta: no blocking gates enabled, pass --min-release-age and/or --fail-on-advisory (or `sandbox init --preset strict`)');
   }
 
   const base = readBaseLockfile(rootDir, facts.pm, baseRef, baseFile);
@@ -1208,9 +1200,9 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
     return blocked ? 1 : 0;
   }
 
-  if (baseMissing) log.warn(`delta: couldn't read the base lockfile (${baseFile ?? baseRef}) — gating ALL ${result.changed.length} resolved packages as a precaution`);
+  if (baseMissing) log.warn(`delta: couldn't read the base lockfile (${baseFile ?? baseRef}), gating ALL ${result.changed.length} resolved packages as a precaution`);
   if (result.changed.length === 0) {
-    log.info(`delta: no dependency changes vs ${baseFile ?? baseRef} — nothing to gate`);
+    log.info(`delta: no dependency changes vs ${baseFile ?? baseRef}, nothing to gate`);
     return 0;
   }
   log.info(`delta: ${result.changed.length} added/changed package(s) vs ${baseFile ?? baseRef}`);
@@ -1218,7 +1210,7 @@ async function runDeltaCommand(globals: Globals, config: SandboxConfig, facts: P
   if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, minReleaseAgeDays, facts.pm, suggestions);
   if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
   logDeprecatedGate(result.deprecated, failOnDeprecated);
-  if (blocked) log.error('delta: would BLOCK this PR — a changed dependency above hit a gate');
+  if (blocked) log.error('delta: would BLOCK this PR, a changed dependency above hit a gate');
   else log.info('delta: no blocking findings in the changed dependencies');
   return blocked ? 1 : 0;
 }
@@ -1245,7 +1237,7 @@ function parseUpgradeArgs(args: string[]): UpgradeArgs {
       if (!t || !(UPGRADE_TARGETS as readonly string[]).includes(t)) fail(`--target needs one of: ${UPGRADE_TARGETS.join('|')} (got '${t ?? ''}')`);
       out.target = t as UpgradeTarget;
     } else if (a === '--reject') out.reject.push(args[++i] ?? '');
-    else fail(`unknown upgrade flag '${a}' — try: --write · --minor · --patch · --target <${UPGRADE_TARGETS.join('|')}> · --reject <pat> · --yes`);
+    else fail(`unknown upgrade flag '${a}', try: --write · --minor · --patch · --target <${UPGRADE_TARGETS.join('|')}> · --reject <pat> · --yes`);
   }
   out.reject = out.reject.filter(Boolean);
   return out;
@@ -1296,14 +1288,14 @@ async function runUpgradeCommand(
     }
   }
   if (!ran) {
-    log.error(`upgrade: ${NCU_SPEC} couldn't run — check the network and the npm-check-updates output above`);
+    log.error(`upgrade: ${NCU_SPEC} couldn't run, check the network and the npm-check-updates output above`);
     return 1;
   }
   const upgrades = mergeProposals(lists);
 
   if (upgrades.length === 0) {
     if (globals.json) console.log(JSON.stringify({ cooldownDays, target: ua.target, blocked: false, upgrades: [] }, null, 2));
-    else log.info(`upgrade: every dependency is already at its newest eligible ${ua.target} version${cooldownDays ? ` within the ${cooldownDays}-day cooldown` : ''} — nothing to do`);
+    else log.info(`upgrade: every dependency is already at its newest eligible ${ua.target} version${cooldownDays ? ` within the ${cooldownDays}-day cooldown` : ''}, nothing to do`);
     return 0;
   }
 
@@ -1333,7 +1325,7 @@ async function runUpgradeCommand(
     if (result.ageViolations.length) logReleaseAgeBlock(result.ageViolations, cooldownDays, facts.pm, suggestions);
     if (result.advisoryHits.length) logAdvisoryHits(result.advisoryHits);
     logDeprecatedGate(deps, ap.failOnDeprecated);
-    log.error('upgrade: BLOCKED — a proposed upgrade hit a gate. package.json is untouched. Skip it with --reject <pkg>, or pin a known-good version.');
+    log.error('upgrade: BLOCKED, a proposed upgrade hit a gate. package.json is untouched. Skip it with --reject <pkg>, or pin a known-good version.');
     return 1;
   }
 
@@ -1345,7 +1337,7 @@ async function runUpgradeCommand(
   if (!ua.yes && process.stdout.isTTY) {
     const ok = await confirm({ message: `Write these ${rows.length} upgrade(s) to package.json and install in the sandbox?` });
     if (isCancel(ok) || !ok) {
-      log.info('upgrade: cancelled — package.json untouched');
+      log.info('upgrade: cancelled, package.json untouched');
       return 0;
     }
   }
@@ -1356,10 +1348,10 @@ async function runUpgradeCommand(
   try {
     writeFileSync(pkgPath, applyUpgrades(readFileSync(pkgPath, 'utf8'), rows));
   } catch (e) {
-    log.error(`upgrade: couldn't write package.json (${e instanceof Error ? e.message : String(e)}) — nothing changed`);
+    log.error(`upgrade: couldn't write package.json (${e instanceof Error ? e.message : String(e)}); nothing changed`);
     return 1;
   }
-  log.info(`upgrade: package.json updated (${rows.length} dep(s)) — installing in the sandbox to refresh the lockfile …`);
+  log.info(`upgrade: package.json updated (${rows.length} dep(s)); installing in the sandbox to refresh the lockfile …`);
   return materialize();
 }
 
@@ -1412,7 +1404,14 @@ function maybeNotifyUpdate(globals: Globals, cliEntry: string, rootDir: string, 
 }
 
 async function main(): Promise<number> {
-  const { globals, cmd, args } = parse(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  const selfArgv = unwrapSelfInvocation(rawArgv);
+  const { globals, cmd, args } = parse(selfArgv ?? rawArgv);
+  if (selfArgv) {
+    const shown = ['sandbox', ...selfArgv].join(' ').trim();
+    // Action + why, in one line: what we're doing, and the plain reason it's safe/expected.
+    log.info(`using the sandbox already on your machine, \`${shown}\` runs directly, instead of fetching the CLI again through npx`);
+  }
 
   // Hidden re-entry: the detached background checker (spawned by scheduleUpdateCheck) runs one
   // registry lookup, writes the cache, and exits. Must short-circuit before any other dispatch.
@@ -1494,7 +1493,7 @@ async function main(): Promise<number> {
     // --sign: emit an Ed25519-signed receipt — but ONLY when every requested gate passed, so the
     // receipt can never attest a "green" boundary while --scan found malware or --secrets found a key.
     if (code !== 0) {
-      log.error('verify --sign: not signing — a check above failed; fix it before requesting a receipt');
+      log.error('verify --sign: not signing, a check above failed; fix it before requesting a receipt');
       return code;
     }
     const keyFile = process.env.SANDBOX_SIGNING_KEY;
@@ -1621,10 +1620,10 @@ async function main(): Promise<number> {
     // for the whole team. Idempotent; only relevant when the project never ran init/setup.
     if (ensureLocalConfigIgnored(context.rootDir)) log.info(`added ${path.basename(file)} to .gitignore so it can't be committed`);
     if (cmd === 'off') {
-      log.warn(`containment OFF for this project — wrote off:true to ${file}. \`sandbox npm install\` now runs on the host. Re-enable: \`sandbox on\``);
+      log.warn(`containment OFF for this project, wrote off:true to ${file}. \`sandbox npm install\` now runs on the host. Re-enable: \`sandbox on\``);
       if (process.env.SANDBOX_OFF) log.info('note: SANDBOX_OFF is also set in this shell, so sandbox stays off here until you unset it too');
     } else {
-      log.info(`containment ON — wrote off:false to ${file}. Installs run in the sandbox again.${process.env.SANDBOX_OFF ? ' (SANDBOX_OFF is still set in this shell — unset it to take effect)' : ''}`);
+      log.info(`containment ON, wrote off:false to ${file}. Installs run in the sandbox again.${process.env.SANDBOX_OFF ? ' (SANDBOX_OFF is still set in this shell, unset it to take effect)' : ''}`);
     }
     return 0;
   }
@@ -1685,17 +1684,29 @@ async function main(): Promise<number> {
       return 0;
     }
     const canPrompt = canPromptInteractively(globals.interactive);
-    if (globals.interactive && !canPrompt) log.info('--interactive requested, but no TTY is attached — continuing non-interactively');
+    if (globals.interactive && !canPrompt) log.info('--interactive requested, but no TTY is attached, continuing non-interactively');
     // The project's own registry hosts (from .npmrc) so the prompt can label them as expected.
     const registryHosts = projectRegistryHints(context.rootDir).hosts;
     // Canaries only do anything where there's an egress proxy log to watch (allowlist mode); plant
     // them once and reuse across retries so the same honeytokens persist if we widen + re-run.
     const wantCanaries = globals.canaries ?? config.install.canaries;
     const canary = wantCanaries && networkPolicy(plan.network).useEgressProxy ? makeCanary() : undefined;
-    if (wantCanaries && !canary) log.info(`canaries requested but inactive here — they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
+    if (wantCanaries && !canary) log.info(`canaries requested but inactive here, they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
     let buildApprovalTries = 0;
     for (;;) {
-      const result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+      let result: ExecuteResult;
+      try {
+        result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, ...(canary ? { canary } : {}) });
+      } catch (e) {
+        // Turn a cryptic build/run failure into the friendly "is Docker running?" guidance when that's
+        // the real cause; otherwise let the original error surface.
+        const hint = await explainBackendDown(backend.bin, globals.backend);
+        if (!hint) throw e;
+        const [problem, ...fixes] = hint;
+        log.error(problem!); // the cause carries the ✖
+        for (const line of fixes) log.info(line); // calm guidance, no alarm glyph
+        return 1;
+      }
       // pnpm refuses unknown dependency build scripts, records them under `allowBuilds:` in
       // pnpm-workspace.yaml as undecided, and exits non-zero. Resolve that here so the user never
       // hand-edits YAML: prompt on a TTY, auto-approve with --allow-all-builds, else print the
@@ -1706,7 +1717,7 @@ async function main(): Promise<number> {
           buildApprovalTries++;
           if (globals.allowAllBuilds) {
             const r = writeBuildApprovals(context.rootDir, new Map(pending.map((n) => [n, true])));
-            log.info(`approved build scripts (contained in the sandbox): ${r.allowed.join(', ')} — re-running install`);
+            log.info(`approved build scripts (contained in the sandbox): ${r.allowed.join(', ')}; re-running install`);
             continue;
           }
           const ttyPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !globals.json && !globals.dryRun;
@@ -1715,7 +1726,7 @@ async function main(): Promise<number> {
             if (decisions) {
               const r = writeBuildApprovals(context.rootDir, decisions);
               const parts = [r.allowed.length ? `allowed ${r.allowed.join(', ')}` : '', r.denied.length ? `denied ${r.denied.join(', ')}` : ''].filter(Boolean);
-              log.info(`updated pnpm-workspace.yaml (${parts.join('; ')}) — re-running install`);
+              log.info(`updated pnpm-workspace.yaml (${parts.join('; ')}), re-running install`);
               continue;
             }
           }
@@ -1725,16 +1736,23 @@ async function main(): Promise<number> {
           return result.code === 0 ? 1 : result.code;
         }
       }
-      if (!result.deniedHosts.length || !canPrompt) return result.code;
+      if (!result.deniedHosts.length || !canPrompt) {
+        // One calm, confident close after a clean dependency op: make the invisible protection legible
+        // once. Only for install-class commands that succeeded — a dev server or a failed run says its
+        // own thing. `classifyCommand` returns 'other' for run/scripts, so those stay quiet.
+        const successNote = containedSuccessLine(result.code, plan.argv);
+        if (successNote) log.info(successNote);
+        return result.code;
+      }
       const deniedHosts = [...new Set(result.deniedHosts)].sort();
       const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });
       if (choice === 'cancel') return 1;
       if (choice === 'allow-project') {
         const r = allowHosts(context.rootDir, deniedHosts, context.configPath);
-        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (team) — retrying`);
+        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (team); retrying`);
       } else if (choice === 'allow-local') {
         const r = allowHostsLocal(context.rootDir, deniedHosts, context.configPath);
-        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (personal, git-ignored) — retrying`);
+        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (personal, git-ignored); retrying`);
       }
       const retry = nextPlanForBlockedEgressChoice(plan, deniedHosts, choice);
       if (!retry) return result.code;
@@ -1775,7 +1793,7 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'check') {
-    // Audit packages WITHOUT installing — the npq-style review pass. No container, no Docker: it only
+    // Audit packages WITHOUT installing — a read-only review pass. No container, no Docker: it only
     // queries the registry and the OSV advisory DB. Takes bare package names the friendly way
     // (`sandbox check express lodash@4`), a full command (`check npm install x`), or no args (audit the
     // current manifest). `force` makes OSV always run, so a bare `check` checks instead of reporting
@@ -1801,7 +1819,7 @@ async function main(): Promise<number> {
   // A global install is host tooling — running it in an ephemeral container installs nothing on the
   // host, so refuse with guidance rather than silently no-op (the path wrappers also pass these through).
   if (isGlobalInstall(cmd, route, args)) {
-    log.warn('global installs run on the host, not in the sandbox — a -g install in an ephemeral container installs nothing on your machine');
+    log.warn('global installs run on the host, not in the sandbox, a -g install in an ephemeral container installs nothing on your machine');
     log.info(`run it on the host instead:  command ${cmd} ${args.join(' ')}    (or: SANDBOX_OFF=1 ${cmd} ${args.join(' ')})`);
     return 1;
   }

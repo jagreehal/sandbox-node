@@ -23,7 +23,7 @@
     the registry, so they run install-class with registry egress instead of falling through to a
     no-network `run` that couldn't re-resolve.
 
-  **`sandbox check` — audit packages before you install them.** An npq-style review pass with **no
+  **`sandbox check` — audit packages before you install them.** A read-only review pass with **no
   container and no Docker**: it only queries the registry and the OSV advisory DB.
 
   - `sandbox check express lodash@4` — bare names, the friendly common case.
