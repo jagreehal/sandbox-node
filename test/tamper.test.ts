@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyCommand, containedSuccessLine, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore, type TreeSnapshot } from '../src/tamper.js';
+import { classifyCommand, containedSuccessLine, sourceWriteExit, summarizeUnexpectedChanges, wroteProjectLocalPnpmStore, type TreeSnapshot } from '../src/tamper.js';
 
 function snap(files: Record<string, string>): TreeSnapshot {
   return { files: new Map(Object.entries(files)) };
@@ -12,6 +12,24 @@ describe('classifyCommand', () => {
     expect(classifyCommand(['corepack', 'pnpm', 'up'])).toBe('install');
     expect(classifyCommand(['corepack', 'pnpm', 'audit', '--fix'])).toBe('install');
     expect(classifyCommand(['node', 'server.js'])).toBe('other');
+  });
+});
+
+describe('sourceWriteExit, the writable-tree tripwire', () => {
+  it('does nothing unless armed, even with source writes', () => {
+    expect(sourceWriteExit(0, 3, false)).toBe(0);
+  });
+
+  it('fails an otherwise-clean run that wrote to the source tree, when armed', () => {
+    expect(sourceWriteExit(0, 1, true)).toBe(1);
+  });
+
+  it('stays clean when armed but nothing was written', () => {
+    expect(sourceWriteExit(0, 0, true)).toBe(0);
+  });
+
+  it('preserves an already-failing exit code (the source write is the lesser news)', () => {
+    expect(sourceWriteExit(2, 5, true)).toBe(2);
   });
 });
 

@@ -18,7 +18,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
     { pm: 'npm', files: {} },
     { pm: 'pnpm', files: { 'pnpm-lock.yaml': '' } },
     { pm: 'yarn', files: { 'yarn.lock': '' } },
-  ])('installs with $pm', async ({ files }) => {
+  ])('installs with $pm', async ({ pm, files }) => {
     const dir = fixture({
       'package.json': JSON.stringify({ name: 't', private: true, dependencies: { 'is-number': '^7.0.0' } }),
       'sandbox.config.json': JSON.stringify({ install: { network: 'on' } }),
@@ -27,6 +27,8 @@ describe.skipIf(!hasDocker)('docker integration', () => {
     const { code, stderr } = await runCli(dir, ['install']);
     expect(code, stderr).toBe(0);
     expect(existsSync(path.join(dir, 'node_modules', 'is-number'))).toBe(true);
+    // Golden orient line: one terse clause before the write. First install -> no deps yet, contained.
+    expect(stderr).toContain(`${pm} · no deps yet · contained`);
   });
 
   // Frozen reproducible install: npm gets a fully read-only source tree; pnpm keeps a
@@ -81,7 +83,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
     expect(warned.code).toBe(0); // install itself succeeds
     expect(warned.stderr).toMatch(/blocked \d+ network request/i); // what happened
     expect(warned.stderr).toContain('exfil.example.com');
-    expect(warned.stderr).toContain('If you trust'); // what to type next: the persistent fix
+    expect(warned.stderr).toContain('Allow it for this repo:'); // what to type next: the persistent fix
     expect(warned.stderr).toContain('sandbox allow exfil.example.com');
     expect(warned.stderr).toContain('--full-network'); // and the one-off escape hatch
     expect(warned.stderr).toContain('"exfil.example.com"'); // allowlist snippet

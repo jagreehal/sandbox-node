@@ -556,20 +556,46 @@ describe('planRiskHintLog, invisible when clean, clear when not', () => {
     expect(planRiskHintLog(0, [], { contained: true })).toEqual([]);
   });
 
-  it('groups hints per package and closes with the contained "heads-up only" line', () => {
+  it('groups hints per package and closes with the native-default "heads-up only" line', () => {
     const lines = planRiskHintLog(1, [recent, bin], { contained: true });
     expect(lines[0]).toEqual({ level: 'info', text: 'checked 1 package for registry risk hints' });
-    expect(lines[1]).toEqual({ level: 'warn', text: '2 things worth a look before installing' }); // count is total hints, even when grouped under one package
+    expect(lines[1]).toEqual({ level: 'warn', text: '1 thing worth a look before installing' }); // a bin is the boundary doing its job — it never counts toward the headline
     // recent_version is error-level → the package block is error, with both hints grouped under it.
     expect(lines[2]!.level).toBe('error');
     expect(lines[2]!.text).toContain('sharp@0.99.0');
     expect(lines[2]!.text).toContain('!! very recently published'); // strong recent_version gets the !! emphasis
-    expect(lines[2]!.text).toContain('adds bin: sharp -> ./cli.js');
-    expect(lines.at(-1)).toEqual({ level: 'info', text: expect.stringContaining('throwaway container') as unknown as string });
+    expect(lines[2]!.text).toContain('adds bin: sharp -> ./cli.js'); // bin still shown as a sub-line next to a real finding
+    expect(lines.at(-1)).toEqual({ level: 'info', text: expect.stringContaining('Want the real boundary too?') as unknown as string });
+  });
+
+  it('a bin is the only signal: package stays silent (debug) and the run reads as clean', () => {
+    // No real finding anywhere → no "worth a look" headline, the bin block sinks to debug.
+    const lines = planRiskHintLog(1, [bin], { contained: false });
+    expect(lines).toEqual([{ level: 'info', text: 'checked 1 package for registry risk hints' }]);
   });
 
   it('closes with the check-context line (nothing installed) when not contained', () => {
-    const lines = planRiskHintLog(1, [bin], { contained: false });
+    const lines = planRiskHintLog(1, [recent], { contained: false });
     expect(lines.at(-1)!.text).toContain('nothing was installed or downloaded');
+  });
+
+  it('leads with error-level packages, so the ✖ block is never buried mid-list', () => {
+    // A warn package generated FIRST, an error package generated SECOND: severity must win over order.
+    const warnPkg: RiskHint = { level: 'warn', code: 'install_script', package: 'basic-ftp', version: '5.3.1', message: 'has prepare script, contained in sandbox', detail: { script: 'prepare' } };
+    const errPkg: RiskHint = { level: 'error', code: 'provenance_regression', package: 'awaitly', version: '1.34.0', message: 'version 1.33.3 shipped npm provenance but 1.34.0 dropped it', detail: { priorVersion: '1.33.3' } };
+    const lines = planRiskHintLog(2, [warnPkg, errPkg], { contained: false });
+    const blocks = lines.filter((l) => l.text.includes('@'));
+    expect(blocks[0]!.level).toBe('error');
+    expect(blocks[0]!.text).toContain('awaitly@1.34.0');
+    expect(blocks[1]!.text).toContain('basic-ftp@5.3.1');
+  });
+
+  it('offers an aged version under a freshness hint, framed as age and with a copy-pasteable pin', () => {
+    const fresh: RiskHint = { level: 'warn', code: 'recent_version', package: 'vitest', version: '4.1.6', message: 'recently published 2 days ago; fresh releases are the supply-chain worm window', detail: { publishedAt: '2026-06-17T00:00:00.000Z', severity: 'light', aged: { version: '4.1.4', ageMs: 18 * 24 * 60 * 60 * 1000 } } };
+    const lines = planRiskHintLog(1, [fresh], { contained: false, pm: 'pnpm' });
+    const block = lines.find((l) => l.text.includes('vitest@4.1.6'))!;
+    expect(block.text).toContain('↳ 4.1.4 predates the worm window (published 18 days ago)');
+    expect(block.text).toContain('sandbox pnpm add vitest@4.1.4');
+    expect(block.text).not.toMatch(/safe|known-good/i); // age is the only claim
   });
 })

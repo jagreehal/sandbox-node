@@ -65,7 +65,8 @@ describe('initNextCommands', () => {
   it('suggests install + test for balanced and strict presets', () => {
     for (const preset of ['balanced', 'strict'] as const) {
       const cmds = initNextCommands(preset);
-      expect(cmds).toContain('sandbox npm install');
+      expect(cmds).toContain('sandbox check zod');
+      expect(cmds).toContain('sandbox install');
       expect(cmds).toContain('sandbox test');
     }
   });
@@ -73,25 +74,26 @@ describe('initNextCommands', () => {
   it('suggests install + run dev for vibe, agent, and trusted presets', () => {
     for (const preset of ['vibe', 'agent', 'trusted'] as const) {
       const cmds = initNextCommands(preset);
-      expect(cmds).toContain('sandbox npm install');
+      expect(cmds).toContain('sandbox check zod');
+      expect(cmds).toContain('sandbox install');
       expect(cmds).toContain('sandbox dev');
     }
   });
 });
 
 describe('initTips', () => {
-  it('offers the preflight and path-install tips for every preset', () => {
+  it('offers the preflight and per-PM-binary tips for every preset', () => {
     for (const preset of ['balanced', 'strict', 'vibe', 'agent', 'trusted'] as const) {
-      const tips = initTips(preset);
-      expect(tips.some((t) => t.includes('preflight'))).toBe(true);
-      expect(tips.some((t) => t.includes('path install'))).toBe(true);
+      const tips = initTips(preset, 'pnpm');
+      expect(tips.some((t) => t.includes('sandbox-pnpm') || t.includes('spnpm'))).toBe(true);
+      expect(tips.some((t) => t.includes('path install'))).toBe(false);
     }
   });
 
   it('adds the devcontainer tip only for the agent preset', () => {
-    expect(initTips('agent').some((t) => t.includes('devcontainer'))).toBe(true);
+    expect(initTips('agent', 'pnpm').some((t) => t.includes('devcontainer'))).toBe(true);
     for (const preset of ['balanced', 'strict', 'vibe', 'trusted'] as const) {
-      expect(initTips(preset).some((t) => t.includes('devcontainer'))).toBe(false);
+      expect(initTips(preset, 'pnpm').some((t) => t.includes('devcontainer'))).toBe(false);
     }
   });
 });

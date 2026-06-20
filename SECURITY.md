@@ -1,9 +1,11 @@
 # Security Policy
 
-`@jagreehal/sandbox-node` is a security tool: it runs untrusted `npm`/`pnpm`/`yarn`/`bun`
-lifecycle scripts inside a Docker/Podman sandbox so they never touch your host credentials,
-filesystem, or network by default. Because people rely on that boundary holding, I take
-reports about it seriously.
+`@jagreehal/sandbox-node` is a security tool: it vets `npm`/`pnpm`/`yarn`/`bun` dependencies before
+they install (malware, typosquats, the release-age worm window), then runs their lifecycle scripts
+inside a Docker/Podman sandbox so they never touch your host credentials, filesystem, or network. That
+is the everyday path (`sandbox <pm>`, the per-PM binaries like `spnpm`, or a persistent devcontainer):
+vetted AND contained. `sandbox check`/`preflight` vet without a container (no Docker), installing
+nothing. Because people rely on that boundary holding, I take reports about it seriously.
 
 ## Reducing residual risk: the non-sandboxed host path
 
@@ -15,8 +17,11 @@ process that never entered the container — so the goal is to make that path bo
 
 **Make it rare — defense in depth, each layer catching a different actor:**
 
-- **You, interactively:** `sandbox path install` wraps `npm`/`pnpm`/`yarn`/`bun`/`npx`/`bunx` so a
-  bare `npm install` routes through the sandbox automatically (the human prefix-guard).
+- **You, interactively:** the per-PM binaries (`sandbox-pnpm` / `spnpm`, …) are the same keystrokes
+  as your package manager, vetted then run in a throwaway container. They're thin front-ends for
+  `sandbox <pm>`, opt-in by typing the prefix; sandbox never shadows your real `npm`/`pnpm` (a silent
+  shell takeover was removed as bad DX). One mode per project: the contained install builds a Linux
+  `node_modules`; your own package manager keeps the tree host-native for your IDE.
 - **An AI agent:** `sandbox init --agent` adds a `PreToolUse` hook that denies a bare `npm install`
   and tells the agent to re-run it through `sandbox`, plus `permissions.deny` rules for `.env`/`secrets/**`.
 - **CI / merges:** `sandbox verify` fails the build unless the repo commits a real boundary, and

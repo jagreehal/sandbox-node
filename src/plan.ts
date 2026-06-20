@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { NetworkMode, SandboxConfig } from './config.js';
-import { type BuildSpec, resolveBuildSpec } from './image.js';
+import { BAKED_YARN_DLX, type BuildSpec, resolveBuildSpec } from './image.js';
 import { COMMON_DEV_PORTS, networkPolicy } from './network.js';
 import { normalizePort } from './ports.js';
 import { frozenInstallArgv, lockfileName, packageManagerCacheDir, pmArgv, pmDefaultRegistryHost, type PackageManager } from './package-manager.js';
@@ -184,11 +184,12 @@ function cacheMounts(config: SandboxConfig, facts: ProjectFacts): Mount[] {
  * bun, …). Plain `npm test` / `npm run dev` / `node` install nothing, so they get no cache mount.
  */
 function runnerPackageManager(argv: string[]): PackageManager | undefined {
-  const [leader, second] = argv;
+  const [leader, second, third] = argv;
   if (leader === 'npx') return 'npm';
   if (leader === 'pnpx') return 'pnpm';
   if (leader === 'bunx') return 'bun';
   if ((leader === 'pnpm' || leader === 'yarn') && second === 'dlx') return leader;
+  if (leader === 'corepack' && second?.startsWith('yarn@') && third === 'dlx') return 'yarn';
   return undefined;
 }
 
@@ -196,6 +197,18 @@ function runCacheMounts(config: SandboxConfig, argv: string[]): Mount[] {
   if (!config.install.cache) return [];
   const pm = runnerPackageManager(argv);
   return pm ? [cacheVolume(pm)] : [];
+}
+
+/**
+ * `yarn dlx` is Berry-only. A lockfile-only Yarn repo has no `packageManager` pin yet, so the
+ * image's activated default is still classic Yarn and corepack would need a run-time download.
+ * Point that one runner at the Berry version already baked into the image instead.
+ */
+function normalizeRunArgv(facts: ProjectFacts, argv: string[]): string[] {
+  if (argv[0] === 'yarn' && argv[1] === 'dlx' && !facts.isYarnBerry) {
+    return ['corepack', `yarn@${BAKED_YARN_DLX}`, ...argv.slice(1)];
+  }
+  return argv;
 }
 
 /**
@@ -313,11 +326,12 @@ export function planAuditSignatures(config: SandboxConfig, facts: ProjectFacts, 
 
 /** Dev loop: full read-write tree, ports, default no-network. `argv` is your command. */
 export function planRun(config: SandboxConfig, facts: ProjectFacts, argv: string[], opts: PlanOptions = {}): RunPlan {
+  const normalizedArgv = normalizeRunArgv(facts, argv);
   const plan: RunPlan = {
     ...commonPlan(config, facts, config.run.network, opts, false),
     workdir: opts.workdir ?? WORKSPACE_ROOT, // run/shell honour the invocation sub-dir
-    argv,
-    mounts: [workspace(facts.cwd), ...runCacheMounts(config, argv), ...grantMounts(facts, config)],
+    argv: normalizedArgv,
+    mounts: [workspace(facts.cwd), ...runCacheMounts(config, normalizedArgv), ...grantMounts(facts, config)],
     ports: runPorts(config),
     interactive: true,
   };

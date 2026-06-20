@@ -1,12 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { confirm, isCancel } from '@clack/prompts';
 import { createBackend, sandboxImageUpToDate } from './backend.js';
 import { readConfig } from './config.js';
 import { capture } from './exec.js';
 import { resolveBuildSpec } from './image.js';
 import { mergeDetectedEgress, printInitSummary, printUnwiredHookWarning, writeAgentArtifacts, writeSandboxConfig } from './init.js';
-import { blockState, detectShell, installPath, rcFileFor } from './path-setup.js';
+import { projectModeLabel } from './mode.js';
+import { detectProjectMode } from './native-deps.js';
+import { resolvePackageManager } from './package-manager.js';
 import { PRESET_NAMES, presetConfig, type PresetName } from './presets.js';
 
 export interface SetupOptions {
@@ -53,7 +54,7 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
     const addedHosts = mergeDetectedEgress(cwd, fresh);
     const configFile = writeSandboxConfig(cwd, fresh);
     const agent = preset === 'agent' ? writeAgentArtifacts(cwd) : undefined;
-    printInitSummary(preset, configFile, agent, addedHosts);
+    printInitSummary(preset, configFile, resolvePackageManager(cwd), agent, addedHosts);
     config = readConfig(cwd);
   } else {
     console.log(`sandbox: using existing ${path.basename(configPath)}`);
@@ -103,43 +104,26 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
   console.log(`network: ${config.run.network}${config.run.devPorts ? ' for dev server' : ''}`);
   if (config.run.devPorts) console.log('ports: common dev ports -> localhost');
   console.log(`secrets: ${secrets}`);
+  const pm = resolvePackageManager(cwd);
+  console.log(projectModeLabel(detectProjectMode(cwd)));
   console.log('');
   console.log('Next:');
-  for (const command of preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox dev'] : ['sandbox npm install', 'sandbox test']) {
-    console.log(`  ${command}`);
-  }
+  console.log('  sandbox check zod          review a package before you add it (no container, installs nothing)');
+  console.log('  sandbox install            vet, then install dependencies natively using the detected package manager');
+  console.log(`  sandbox ${preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? 'dev' : 'test'}                ${preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? 'run your app in the container' : 'run your project tests in the container'}`);
 
-  await offerPathWiring();
+  printBinsTip(pm);
   return 0;
 }
 
 /**
- * Offer the standing default: shell wrappers so a bare `npm/pnpm/yarn/bun install` routes through
- * sandbox without the prefix — the answer to "I keep forgetting to type `sandbox`". On a TTY we ask
- * and wire it in one keypress (editing the rc for them); off a TTY (CI, `--preset` scripts) or under
- * PowerShell (print-only) we print the single command to run. Skips silently when it's already current.
+ * Point at the per-PM binaries: same keystrokes as your package manager, gated first, then a
+ * native host install. The explicit `sandbox <pm>` form remains the one-keystroke container path.
+ * Your real `npm`/`pnpm` is never shadowed. No shell editing, no takeover.
  */
-async function offerPathWiring(): Promise<void> {
-  const shell = detectShell();
-  const file = rcFileFor(shell); // undefined for pwsh (print-and-paste only)
-
-  if (file && existsSync(file) && blockState(readFileSync(file, 'utf8')) === 'current') {
-    console.log('');
-    console.log(`sandbox: shell wrappers already active in ${path.basename(file)}, bare npm/pnpm/yarn/bun install route through sandbox`);
-    return;
-  }
-
+function printBinsTip(pm: ReturnType<typeof resolvePackageManager>): void {
   console.log('');
-  if (file && process.stdout.isTTY) {
-    const ok = await confirm({ message: `Route bare npm/pnpm/yarn/bun install through sandbox automatically? (edits ~/${path.basename(file)})` });
-    if (isCancel(ok) || !ok) {
-      console.log('sandbox: skipped, wire it any time with `sandbox path install` (undo: `sandbox path uninstall`)');
-      return;
-    }
-    for (const m of installPath({ shell }).messages) console.log(m);
-    return;
-  }
-
-  console.log('Tip: stop typing the `sandbox` prefix. `sandbox path install` routes bare');
-  console.log('     npm/pnpm/yarn/bun install + npx through sandbox in your shell (undo: `sandbox path uninstall`).');
+  console.log('Advanced:');
+  console.log(`  s${pm} add zod              same gated native path, shorter keystrokes (your real ${pm} stays untouched)`);
+  console.log('  sandbox devcontainer init  keep your editor + agent inside the container for the full session');
 }

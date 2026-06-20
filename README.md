@@ -1,21 +1,17 @@
-# Put `sandbox` in front of npm, pnpm, yarn, and bun
+# Catch a bad dependency before it lands
 
-Safer installs for everyday work and AI agents. Install scripts still work; your laptop secrets stay out.
-
-Your risky `npm install` runs in a throwaway box that can see your project and the npm registry, and nothing else.
+A supply-chain guard for npm, pnpm, yarn, and bun, for everyday work and AI agents. Before an install fetches anything it vets the target versions (malware, typosquats, fresh releases inside the worm window, deprecation), then by default runs your package manager natively on the host so your IDE gets host-native binaries. When you want the real boundary, use explicit `sandbox <pm>` or a devcontainer. `sandbox check` reviews a package without installing anything, no Docker.
 
 ```mermaid
 flowchart TB
-    YOU["👤 you run · <b>sandbox npm install</b>"]:::cmd
-    subgraph BOX["📦 throwaway container · the risky code runs here"]
-        RUN["postinstall · node-gyp · any package code"]:::neutral
+    YOU["👤 you run · <b>sandbox add zod</b>"]:::cmd
+    YOU --> GATE{"🛡️ gate engine · checks BEFORE any byte is fetched"}
+    GATE -.->|"🚫 malware · typosquat · worm-window · deprecated"| STOP["blocked · nothing installed"]:::danger
+    GATE ==>|"✅ clean"| BOX
+    subgraph BOX["📦 throwaway container · the install runs here"]
+        RUN["no SSH keys · no npm token · no creds · default-deny egress · deleted after"]:::neutral
     end
-    YOU --> BOX
-    BOX ==>|"✅ can see"| PROJ["📁 your project files"]:::safe
-    BOX ==>|"✅ can reach"| REG["📦 npm registry only"]:::safe
-    BOX -.->|"🚫 can't see"| SEC["🔑 SSH keys · npm token · AWS creds · .env · home"]:::danger
-    BOX -.->|"🚫 can't reach"| EVIL["🌐 anywhere else on the internet"]:::danger
-    BOX --> OUT["🧹 box deleted after · 📁 your installed deps stay"]:::cmd
+    BOX ==> DONE["📁 node_modules built · run tools with sandbox, or your own install for a host-native tree"]:::safe
     classDef cmd fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
     classDef safe fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef danger fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
@@ -23,7 +19,7 @@ flowchart TB
     style BOX fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
 ```
 
-Just add `sandbox` in front of the command you already run. Install-time package code (`postinstall`, `node-gyp`) runs in a container with no access to your SSH keys, npm token, cloud credentials, or editor/agent state unless you explicitly grant it. It auto-detects your package manager (npm, pnpm, yarn, or bun) and mirrors it.
+Add a dependency with `sandbox add zod`, install with `sandbox install`, refresh with `sandbox update`. It auto-detects npm/pnpm/yarn/bun and mirrors it, vets the target versions, then runs the install natively on the host. Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. Want the boundary too? Use explicit `sandbox pnpm add zod` or `sandbox devcontainer init`. To review a package without installing, run `sandbox check express` (no Docker). (Already think in your package manager? The expert aliases like `spnpm add zod` are the same gated native path, fewer keystrokes. See [Expert: per-PM shortcuts](#expert-per-pm-shortcuts).)
 
 ## Quickstart
 
@@ -31,19 +27,22 @@ Just add `sandbox` in front of the command you already run. Install-time package
 
 ```bash
 sandbox setup --vibe         # one-button setup: config, backend check, build images
-sandbox npm install          # install deps; lifecycle scripts are contained
-sandbox pnpm add zod         # add a dependency (saved exact by default)
-sandbox pnpm remove zod      # drop one; uninstall scripts run in the box, not your home
-sandbox dev                  # run dev/start/serve with native PM syntax
-sandbox test                 # run any non-colliding package.json script
-sandbox x vite               # one-off tools, npx/bunx-style
+sandbox add zod              # vet, then install natively on the host
+sandbox install              # full install, gated + native by default
+sandbox update               # refresh deps through the same gates
+sandbox x vite               # run a one-off tool in the box
+sandbox pnpm add zod         # explicit container boundary for this install
+sandbox check express        # vet a package WITHOUT installing (no Docker needed)
+sandbox devcontainer init    # containment + a happy IDE: editor and deps both in the container
 ```
 
-Tired of typing the prefix? `sandbox path install` wires shell wrappers so a bare `npm install` / `pnpm add` / `npm uninstall` / `npx` routes through the sandbox automatically (undo: `sandbox path uninstall`).
+`sandbox add` / `sandbox install` / `sandbox update` are the everyday write path: the verbs you already use, vetted, then run natively on the host. Sandbox auto-detects your package manager (npm/pnpm/yarn/bun) and mirrors it, so you don't name it. Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. When trust drops, the one-keystroke boundary is explicit `sandbox <pm>` or `sandbox devcontainer init`.
+
+Before every write, sandbox prints a one-line orient in the form `pnpm · host-native deps · native` or `pnpm · container-built deps · contained` (package manager, project mode, execution mode), so you always know which tree you're touching.
 
 ## Works with
 
-Every package manager and the verbs you already use. Put `sandbox` in front of any of them:
+Every package manager and the verbs you already use. Sandbox detects your PM and mirrors the verb, so `sandbox add zod` runs the right command underneath:
 
 | | install | add / remove | update / dedupe | audit | run / exec |
 | --- | --- | --- | --- | --- | --- |
@@ -52,18 +51,29 @@ Every package manager and the verbs you already use. Put `sandbox` in front of a
 | **yarn** | `install` · bare `yarn` | `add` · `remove` | `up` · `upgrade` · `dedupe` | `audit` | `<script>` · `dlx` |
 | **bun** | `install` | `add` · `remove` | `update` | `audit` | `<script>` · `bunx` · `x` |
 
-Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgrade`) passes through the same supply-chain gates (release-age cooldown, OSV malware check, and risk hints) before the bytes are fetched. Removing a dependency fetches nothing new, so it skips the gates but stays contained.
+Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgrade`) passes through the same supply-chain gates (release-age cooldown, OSV malware check, and risk hints) before the bytes are fetched. Removing a dependency fetches nothing new, so it skips the gates.
 
-## Protected by default
+## Always on: the gate engine
+
+Every install is vetted *before any byte is fetched*. No Docker needed for the check (`sandbox check` / `preflight` run it standalone):
+
+- **Known malware.** OSV advisories plus your own malware feeds and team advisories. A match is a hard block.
+- **Typosquats & risk hints.** Name-confusion, maintainer takeover, provenance regression, expired domains, suspiciously-low downloads.
+- **The worm window.** A release-age cooldown blocks freshly-published versions (where supply-chain worms live); safe-install can substitute an aged release and pin it.
+- **Deprecation.** Abandoned versions are blocked by default.
+
+## In the container: the boundary
+
+Explicit `sandbox <pm>` and `sandbox devcontainer init` are the containment surfaces. This is the boundary, and it protects:
 
 - **Credentials.** No `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
 - **Persistence.** `.git`, `.github`, `.husky`, `.claude`, `.vscode`, …, and `package.json` are read-only, so an install can't plant auto-running hooks.
-- **Egress.** Default-deny; install reaches only the registry hosts in `egress.allow`.
+- **Egress.** Default-deny; the install reaches only the registry hosts in `egress.allow`.
 - **Capabilities.** `--cap-drop ALL`, `--security-opt no-new-privileges`, container-root ≠ host-root.
 
-## NOT protected by default
+## NOT protected
 
-> ⚠️ **Your source tree stays writable.** Package managers need a writable root, so a malicious dependency can still overwrite files in `src/` during install (you'll see it in `git diff`). `sandbox` blocks credential theft, persistence, and exfiltration. It leaves source edits to you. Use `--frozen` for a read-only tree (npm, yarn, bun; pnpm keeps a writable root), and review `git diff` after installing from an untrusted source.
+> ⚠️ **Your source tree stays writable, even in the container.** Package managers need a writable root, so a malicious dependency can still overwrite files in `src/` during install. It's not invisible: every contained install reports the project files it changed outside dependencies and records them in the audit log, and `--fail-on-source-writes` (on by default in the `strict` preset) turns that into a non-zero exit. That's detection after the fact, not prevention. Use `--frozen` for a read-only tree (npm, yarn, bun; pnpm keeps a writable root), and review `git diff` after installing from an untrusted source.
 
 | What | How to lock it down |
 | --- | --- |
@@ -76,16 +86,40 @@ Anything that pulls *new* versions (`install`, `add`, `update`, `dedupe`, `upgra
 | Command | What it does |
 | --- | --- |
 | `sandbox setup [--preset N]` | One-button onboarding: write config, check the backend, build images, print next steps. |
-| `sandbox npm install` · `pnpm add zod` · `npm uninstall x` | Contained install / add / remove (auto-detects the PM). |
+| `sandbox install` · `sandbox add zod` · `sandbox update` | Gated native install / add / refresh (auto-detects the PM). |
 | `sandbox dev` · `sandbox test` · `sandbox x <tool>` | Run a dev server, a script, or a one-off tool in the box. |
-| `sandbox path install` | Route bare `npm/pnpm/yarn/bun` + `npx` through the sandbox in your shell. |
 | `sandbox doctor [--fix]` | Check config, package manager, backend, daemon, and image state. |
 | `sandbox check [pkg \| file.json]` | Audit deps **before** you install them: OSV advisories, typosquats, fresh/deprecated versions. No container, no Docker. Bare `check` audits the whole project (root + every workspace); pass a `package.json` to audit a specific manifest. |
 | `sandbox scan` | Retroactive malware sweep over your committed lockfile (CI/cron). |
 | `sandbox secrets [path]` | Offline scan for committed credentials (CI tripwire). |
 | `sandbox verify` | CI gate: fail unless the repo commits a real, un-loosened sandbox boundary. |
+| `sandbox devcontainer init` | Containment and a happy IDE together: editor + deps in the container (node_modules in a Docker volume). |
 
 Run `sandbox help` for the full surface, or see the [full reference](docs/reference.md).
+
+## Expert: per-PM shortcuts
+
+If you already think in your package manager, the per-PM binaries are the same gated native path with shorter keystrokes. Nothing new to learn, just muscle memory:
+
+```bash
+sandbox-pnpm add zod   # explicit per-PM binary
+spnpm add zod          # terse alias for the same thing
+snpm install           # npm
+snpx vite              # npx, one-off tool
+sbun add hono          # bun
+```
+
+Each mirrors the matching package manager while keeping the `sandbox` gate engine in front. They never shadow your real `npm`/`pnpm`/`yarn`/`bun`; you opt in by typing the prefix. Use them or stick with `sandbox add`, both land in the same native-default path. Use explicit `sandbox <pm>` when you want the throwaway container boundary.
+
+## On macOS or Windows: host IDEs and `node_modules`
+
+Installs run inside a Linux container, so the package manager fetches the **Linux** build of every platform-specific native dependency. The modern JS toolchain is itself native (esbuild, rollup/rolldown, swc/oxc, vite, lightningcss, `@biomejs/biome`, sharp, …), so on a macOS or Windows host those binaries can't load, and your editor's language server and host commands (`vitest`, `tsx`, the dev server) fail with a cryptic *Cannot find module `@rollup/rollup-darwin-arm64`*. This is near-universal, not an edge case: almost every real project pulls at least one of these.
+
+So on macOS/Windows, pick the mode that matches what you're doing (one mode per project, never both):
+
+- **Run your tools in the box too.** `sandbox test`, `sandbox dev`, `sandbox build` execute on the same Linux platform the install targeted, so the binaries always match.
+- **Want a host-native tree for your IDE?** Keep `node_modules` local: run your own `pnpm install`. That is local mode, and your IDE loads native binaries. Sandbox warns before a contained install would replace a host-native tree with a Linux one, so the switch is always deliberate.
+- **Want the container boundary AND host editing?** `sandbox devcontainer init` puts the editor and tooling inside the container (node_modules in a Docker volume), so there's no host/container mismatch at all. The cleanest fit for untrusted repos or agent work.
 
 ## Turn it off
 
@@ -94,10 +128,10 @@ For a repo you trust, opt out of containment so `sandbox` becomes a transparent 
 ```bash
 sandbox off        # writes off:true to sandbox.config.local.json (your git-ignored override)
 sandbox on         # back in the sandbox
-SANDBOX_OFF=1 sandbox npm install   # one command (or, exported, a whole shell)
+SANDBOX_OFF=1 sandbox install   # one command (or, exported, a whole shell)
 ```
 
-`off: true` in `sandbox.config.json` does it for the whole team; `sandbox.config.local.json` (or `sandbox off`) does it just for you, so a globally-wired `sandbox path install` stops sandboxing there. Sandbox-only commands (`check`, `doctor`, `verify`, …) keep working either way.
+`off: true` in `sandbox.config.json` does it for the whole team; `sandbox.config.local.json` (or `sandbox off`) does it just for you. Sandbox-only commands (`check`, `doctor`, `verify`, …) keep working either way.
 
 ## Install
 

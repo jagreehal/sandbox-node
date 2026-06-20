@@ -15,7 +15,7 @@ export function isCompletionShell(value: string): value is CompletionShell {
  * checks each entry appears in the script, so add new commands here when they land.
  */
 export const SANDBOX_COMMANDS = [
-  'init', 'setup', 'allow', 'off', 'on', 'path', 'doctor', 'build', 'verify', 'scan', 'secrets', 'feeds', 'delta', 'check', 'preflight', 'approve-builds',
+  'init', 'setup', 'allow', 'off', 'on', 'doctor', 'build', 'verify', 'scan', 'secrets', 'feeds', 'delta', 'check', 'preflight', 'approve-builds',
   'badge', 'devcontainer', 'completion', 'shell', 'install', 'add', 'remove', 'run', 'x', 'update', 'upgrade', 'audit', 'dev', 'script', 'help', 'version',
   'npm', 'pnpm', 'yarn', 'bun', 'npx', 'bunx', 'node', 'tsx', 'turbo', 'nx',
 ] as const;
@@ -23,8 +23,9 @@ export const SANDBOX_COMMANDS = [
 /** Global flags parsed before the command (mirrors `parse()` in cli.ts). */
 export const GLOBAL_FLAGS = [
   '--config', '--image', '--backend', '--env', '--env-from', '--dev', '--frozen', '--fail-on-egress',
-  '--risk', '--fail-on-risk', '--full-network', '--dry-run', '--min-release-age', '--allow-recent',
-  '--deep', '--interactive', '--fail-on-advisory', '--allow-deprecated', '--json',
+  '--fail-on-source-writes', '--canaries', '--no-canaries', '--risk', '--fail-on-risk', '--full-network',
+  '--dry-run', '--min-release-age', '--allow-recent', '--deep', '--interactive', '--fail-on-advisory',
+  '--allow-deprecated', '--allow-all-builds', '--allow-build-hosts', '--no-update-check', '--json',
 ] as const;
 
 export const PRESET_VALUES = ['strict', 'balanced', 'vibe', 'agent', 'trusted'] as const;

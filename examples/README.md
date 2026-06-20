@@ -45,8 +45,8 @@ sandbox bun install        # bun runs in the sandbox; your secrets stay on the h
 - install egress stays on `allowlist`
 - `package.json` and persistence paths are read-only
 - `HOME=/root`, `cap-drop ALL`, and `no-new-privileges` are in effect
-- fetch-and-run commands (`npx`/`dlx`/`bunx`) stay on the `run` model by default, so they
-  have **no network** until you deliberately widen it
+- fetch-and-run commands (`npx`/`dlx`/`bunx`) still route through the `run` model, but
+  pick up install-class registry allowlist networking so package fetch fallback works by default
 - workspace installs resolve to the repo root while `run` stays in the leaf package dir
 - the React+Vite dev server plan sets `HOST=0.0.0.0` so the container-bound server is reachable
   from the host, and port 5173 is forwarded
@@ -68,7 +68,7 @@ passes only if:
 - the probe cannot see host creds, cannot create `.github/`, and cannot egress
 - a follow-up `--frozen` install resolves to the package-manager-specific reproducible
   mode and succeeds with the seeded lockfile
-- fetch-and-run commands work once you deliberately opt into run networking
+- fetch-and-run commands work on the default registry allowlist, with no extra run-network override
 - from a workspace package, install happens at the root but `run` executes in the package dir
 - the React+Vite example installs React and Vite through the sandbox, and the dev server
   is reachable on `http://localhost:5173` with HMR active

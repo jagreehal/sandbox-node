@@ -56,6 +56,9 @@ describe('cli (golden, no docker)', () => {
   it('prints help with all commands and globals', async () => {
     const { code, stdout } = await runCli(process.cwd(), ['help']);
     expect(code).toBe(0);
+    expect(stdout).toContain('Quick start:');
+    expect(stdout).toContain('sandbox install');
+    expect(stdout).toContain('sandbox add zod');
     for (const token of ['init', 'setup', 'allow', 'check', 'preflight', 'doctor', 'build', 'install', 'add', 'remove', 'run', 'shell', '--config', '--image', '--backend', '--dev', '--interactive', '--full-network', '--frozen', '--risk', '--fail-on-risk', '--json']) {
       expect(stdout).toContain(token);
     }
@@ -67,14 +70,14 @@ describe('cli (golden, no docker)', () => {
     const { code, stdout, stderr } = await runCli(dir, ['run', '--', 'node', '-e', 'console.log("HOST-RAN")'], { SANDBOX_OFF: '1' });
     expect(code).toBe(0);
     expect(stdout).toContain('HOST-RAN');
-    expect(stderr).toContain('sandbox is OFF (SANDBOX_OFF)');
+    expect(stderr).toContain('containment is off (SANDBOX_OFF)');
   });
 
   it('`sandbox off` git-ignores the personal override so it can\'t be committed for the whole team', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' }); // no init/setup run → no .gitignore yet
     const { code, stderr } = await runCli(dir, ['off']);
     expect(code).toBe(0);
-    expect(stderr).toContain('containment OFF');
+    expect(stderr).toContain('containment is now off for this project');
     expect(existsSync(path.join(dir, 'sandbox.config.local.json'))).toBe(true);
     expect(readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('sandbox.config.local.json');
   });
@@ -452,6 +455,13 @@ describe('cli (golden, no docker)', () => {
     expect(dev.ports).toEqual([]);
   });
 
+  it('`sandbox x` uses install-style networking so fetch fallback works without a separate run-network override', async () => {
+    const dir = fixture({ 'package.json': '{"name":"x"}' });
+    const plan = JSON.parse((await runCli(dir, ['--json', 'x', 'vite'])).stdout);
+    expect(plan.network).toBe('allowlist');
+    expect(plan.ports).toEqual([]);
+  });
+
   it('--allow-build-hosts widens egress to the curated native-build hosts (still default-deny otherwise)', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' });
     const base = JSON.parse((await runCli(dir, ['--json', 'install'])).stdout);
@@ -727,7 +737,7 @@ describe('cli (golden, no docker)', () => {
     const first = await runCli(dir, ['init', '--preset', 'strict']);
     expect(first.code).toBe(0);
     expect(first.stdout).toContain('sandbox: wrote sandbox.config.json using the strict preset');
-    expect(first.stdout).toContain('sandbox npm install');
+    expect(first.stdout).toContain('sandbox install'); // beginner write path in Next commands (not `sandbox npm install`)
     const cfg = JSON.parse(readFileSync(path.join(dir, 'sandbox.config.json'), 'utf8'));
     expect(cfg.install).toEqual({
       network: 'allowlist',
@@ -741,6 +751,9 @@ describe('cli (golden, no docker)', () => {
       failOnDeprecated: true,
       cache: true,
       canaries: true,
+      failOnSourceWrites: true, // strict opts into the source-write tripwire (catches the pnpm writable-root case)
+      safeInstall: true,
+      pinExact: false,
     });
     expect(cfg.run.network).toBe('none');
 
@@ -753,13 +766,24 @@ describe('cli (golden, no docker)', () => {
     expect(JSON.parse(readFileSync(path.join(dir, 'sandbox.config.json'), 'utf8')).install.network).toBe('on');
   });
 
+  it('first-run init prints the project mode and demotes the per-PM binaries to an advanced tip', async () => {
+    // Golden transcript for first contact: a fresh project surfaces its mode (no deps yet), points at
+    // the beginner write path, and frames sandbox-<pm>/s<pm> as an advanced shortcut, not the default.
+    const dir = fixture({});
+    const { code, stdout } = await runCli(dir, ['init', '--preset', 'balanced']);
+    expect(code).toBe(0);
+    expect(stdout).toContain('project mode: no deps installed yet'); // mode is visible, not hidden in setup
+    expect(stdout).toMatch(/Tip: advanced: s(npm|pnpm|yarn|bun) add zod uses the same contained path/); // expert-only framing
+    expect(stdout).toContain('sandbox install'); // the beginner write path is still front-and-centre
+  });
+
   it('init --agent writes repo instructions and wires the enforcement hook', async () => {
     const dir = fixture({});
     const { code, stdout } = await runCli(dir, ['init', '--agent']);
     expect(code).toBe(0);
     expect(stdout).toContain('sandbox: wrote .sandbox/AGENT.md');
     expect(stdout).toContain('wired .claude/settings.json');
-    expect(readFileSync(path.join(dir, '.sandbox', 'AGENT.md'), 'utf8')).toContain('Use `sandbox npm install`, not `npm install`');
+    expect(readFileSync(path.join(dir, '.sandbox', 'AGENT.md'), 'utf8')).toContain('Use `sandbox install`, not `npm install`');
     expect(readFileSync(path.join(dir, '.sandbox', 'hooks', 'enforce-sandbox.mjs'), 'utf8')).toContain('Blocked by sandbox');
     expect(JSON.parse(readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8')).hooks.PreToolUse[0].hooks[0].command).toContain('enforce-sandbox.mjs');
   });
@@ -773,7 +797,7 @@ describe('cli (golden, no docker)', () => {
     expect(stdout).toContain('sandbox: backend ready: Docker version 27.0.0');
     expect(stdout).toContain('sandbox: building node-install-sandbox:latest and the egress proxy image');
     expect(stdout).toContain('sandbox: vibe preset');
-    expect(stdout).toContain('sandbox npm install');
+    expect(stdout).toContain('sandbox install'); // beginner write path in Next commands (not `sandbox npm install`)
     expect(stdout).toContain('sandbox dev');
     expect(existsSync(path.join(dir, 'sandbox.config.json'))).toBe(true);
   });

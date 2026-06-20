@@ -3,6 +3,8 @@ import path from 'node:path';
 import * as p from '@clack/prompts';
 import { LOCAL_CONFIG_NAME, writeConfig, type SandboxConfig } from './config.js';
 import { installAgentHook, MANUAL_AGENT_SNIPPET, type HookInstall } from './hook.js';
+import { projectModeLabel } from './mode.js';
+import { resolvePackageManager, type PackageManager } from './package-manager.js';
 import { PRESETS, PRESET_NAMES, presetConfig, type PresetName } from './presets.js';
 import { detectEgressHosts, missingAllowHosts } from './registry.js';
 import { HOST_GROUPS, hostGroup } from './host-groups.js';
@@ -39,7 +41,9 @@ const AGENT_DIR = '.sandbox';
 const AGENT_FILE = 'AGENT.md';
 const AGENT_BODY = `When working in this repo:
 
-- Use \`sandbox npm install\`, not \`npm install\`
+- Use \`sandbox install\`, not \`npm install\`
+- Use \`sandbox add <pkg>\`, not \`npm install <pkg>\`
+- Use \`sandbox update\`, not \`npm update\`
 - Use \`sandbox dev\`, not \`npm run dev\`
 - Use \`sandbox test\`, not \`npm test\`
 - Use \`sandbox script build\` when a script name collides with a sandbox command
@@ -92,14 +96,15 @@ export function writeAgentArtifacts(cwd: string): AgentArtifacts {
 }
 
 export function initNextCommands(preset: PresetName): string[] {
-  return preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? ['sandbox npm install', 'sandbox dev'] : ['sandbox npm install', 'sandbox test'];
+  return preset === 'vibe' || preset === 'agent' || preset === 'trusted'
+    ? ['sandbox check zod', 'sandbox install', 'sandbox dev']
+    : ['sandbox check zod', 'sandbox install', 'sandbox test'];
 }
 
-/** Post-init tips, one string per tip. Preflight + path apply to every preset; agent adds one. */
-export function initTips(preset: PresetName): string[] {
+/** Post-init tips, one string per tip. The first two apply to every preset; agent adds one. */
+export function initTips(preset: PresetName, pm: PackageManager): string[] {
   const tips = [
-    'review before installing, sandbox preflight npm install runs the gates without installing',
-    'stop typing the prefix, sandbox path install routes bare npm/pnpm/yarn/bun install through sandbox in your shell',
+    `advanced: s${pm} add zod uses the same gated native path with shorter keystrokes; your real ${pm} stays untouched`,
   ];
   if (preset === 'agent') tips.push('full agent isolation (editor + agent in the jail), sandbox devcontainer init');
   return tips;
@@ -112,7 +117,7 @@ export function printUnwiredHookWarning(settingsRelPath: string): void {
   for (const line of MANUAL_AGENT_SNIPPET.split('\n')) console.log(`    ${line}`);
 }
 
-export function printInitSummary(preset: PresetName, configFile: string, agent?: AgentArtifacts, addedHosts: string[] = []): void {
+export function printInitSummary(preset: PresetName, configFile: string, pm: PackageManager, agent?: AgentArtifacts, addedHosts: string[] = []): void {
   const rel = (f: string) => path.relative(path.dirname(configFile), f);
   console.log(`sandbox: wrote ${path.basename(configFile)} using the ${preset} preset`);
   if (addedHosts.length) {
@@ -128,9 +133,10 @@ export function printInitSummary(preset: PresetName, configFile: string, agent?:
     }
   }
   console.log('');
+  console.log(projectModeLabel('no-deps'));
   console.log('Next:');
   for (const command of initNextCommands(preset)) console.log(`  ${command}`);
-  for (const tip of initTips(preset)) {
+  for (const tip of initTips(preset, pm)) {
     console.log('');
     console.log(`Tip: ${tip}`);
   }
@@ -158,7 +164,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
     const addedHosts = mergeDetectedEgress(cwd, config);
     const configFile = writeSandboxConfig(cwd, config);
     const agent = preset === 'agent' ? writeAgentArtifacts(cwd) : undefined;
-    printInitSummary(preset, configFile, agent, addedHosts);
+    printInitSummary(preset, configFile, resolvePackageManager(cwd), agent, addedHosts);
     return 0;
   }
 
@@ -225,7 +231,7 @@ export async function runInit(cwd: string, opts: InitOptions = {}): Promise<numb
   const configFile = writeSandboxConfig(cwd, config);
   const agent = preset === 'agent' ? writeAgentArtifacts(cwd) : undefined;
   p.outro(`Wrote sandbox.config.json (${preset})`);
-  printInitSummary(preset, configFile, agent, addedHosts);
+  printInitSummary(preset, configFile, resolvePackageManager(cwd), agent, addedHosts);
   if (groupHosts.length) console.log(`sandbox: added ${groups.join(', ')} group(s) to egress.allow: ${groupHosts.join(', ')}`);
   return 0;
 }

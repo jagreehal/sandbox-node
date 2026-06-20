@@ -15,7 +15,7 @@ describe('presets', () => {
 
   it('strict is the most locked-down', () => {
     const s = presetConfig('strict');
-    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: true });
+    expect(s.install).toEqual({ network: 'allowlist', frozen: true, riskHints: 'thorough', failOnRisk: false, minReleaseAgeDays: 7, minReleaseAgeExclude: [], failOnAdvisory: true, malwareFeeds: [], failOnDeprecated: true, cache: true, canaries: true, failOnSourceWrites: true, safeInstall: true, pinExact: false });
     expect(s.run.network).toBe('none');
     expect(s.grants['ssh-agent']).toBe(false);
   });
@@ -34,6 +34,13 @@ describe('presets', () => {
     expect(presetConfig('strict').install.failOnAdvisory).toBe(true);
     for (const name of ['balanced', 'vibe', 'agent', 'trusted'] as const) {
       expect(presetConfig(name).install.failOnAdvisory).toBe(false);
+    }
+  });
+
+  it('only strict arms the source-write tripwire (the everyday presets keep it advisory)', () => {
+    expect(presetConfig('strict').install.failOnSourceWrites).toBe(true);
+    for (const name of ['balanced', 'vibe', 'agent', 'trusted'] as const) {
+      expect(presetConfig(name).install.failOnSourceWrites).toBe(false);
     }
   });
 

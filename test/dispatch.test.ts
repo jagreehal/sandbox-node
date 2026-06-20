@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from '../src/dispatch.js';
+import { containerWritePm, effectivePm, isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from '../src/dispatch.js';
 
 const route = (cmd: string): Route | undefined => routePassthrough(cmd.split(' ').filter(Boolean));
 
@@ -228,5 +228,34 @@ describe('unwrapSelfInvocation, never sandbox sandbox', () => {
     expect(unwrap('npx cowsay hi')).toBeUndefined();
     expect(unwrap('npm install lodash')).toBeUndefined();
     expect(unwrap('check lodash')).toBeUndefined();
+  });
+});
+
+describe('effectivePm', () => {
+  it('follows the routed package manager for pm-bearing routes, not the repo pm', () => {
+    // `sandbox npm install` in a pnpm repo gates and pins under npm (route.pm), not facts.pm.
+    expect(effectivePm(route('npm install')!, 'pnpm')).toBe('npm');
+    expect(effectivePm(route('yarn add zod')!, 'pnpm')).toBe('yarn');
+    expect(effectivePm(route('npm uninstall lodash')!, 'pnpm')).toBe('npm');
+    expect(effectivePm(route('npm update')!, 'pnpm')).toBe('npm');
+  });
+
+  it('falls back to the repo pm for argv-only routes (audit/run carry no pm)', () => {
+    expect(effectivePm(route('npm audit')!, 'pnpm')).toBe('pnpm');
+    expect(effectivePm(route('npm run build')!, 'pnpm')).toBe('pnpm');
+  });
+});
+
+describe('containerWritePm', () => {
+  it('reports the pm whose contained install rebuilds node_modules', () => {
+    expect(containerWritePm(route('npm install')!)).toBe('npm');
+    expect(containerWritePm(route('pnpm add zod')!)).toBe('pnpm');
+    expect(containerWritePm(route('yarn upgrade')!)).toBe('yarn');
+  });
+
+  it('returns undefined for routes that write no new tree (remove / read-only audit, run)', () => {
+    expect(containerWritePm(route('npm uninstall lodash')!)).toBeUndefined();
+    expect(containerWritePm(route('npm audit')!)).toBeUndefined();
+    expect(containerWritePm(route('npm run build')!)).toBeUndefined();
   });
 });

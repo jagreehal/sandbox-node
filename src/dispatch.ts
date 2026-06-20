@@ -152,7 +152,7 @@ function isSelfPackageToken(token: string): boolean {
 const SELF_RUNNERS = new Set(['npx', 'bunx', 'pnpx', 'dlx', 'exec', 'x']);
 
 /**
- * Don't sandbox sandbox. With `sandbox path install` active, the shell routes `npx` through us, so
+ * Don't sandbox sandbox. A wrapper or alias can route `npx` through us, so
  * `npx @jagreehal/sandbox-node check lodash` arrives as `sandbox npx @jagreehal/sandbox-node check
  * lodash` — which would otherwise fetch-and-run our OWN CLI inside a network-less container and die
  * with a DNS error, never reaching `check`. Detect that shape and unwrap it to the bare subcommand
@@ -179,4 +179,47 @@ export function isGlobalInstall(cmd: string, route: Route, args: string[]): bool
   if (installClass && args.some((a) => a === '-g' || a === '--global' || a === '--location=global')) return true;
   if (cmd === 'yarn' && args[0] === 'global') return true;
   return false;
+}
+
+/**
+ * The package manager a route will actually run under. `sandbox npm install` in a pnpm repo runs
+ * npm, so the gates, the `--deep` lockfile read, and every remediation/pin line must follow npm
+ * (route.pm), not the repo-probed pm, exactly as the plan threads route.pm through. Argv-only routes
+ * (audit/run) carry no pm, so they fall back to the repo's detected one (`repoPm`). Exhaustive over
+ * `Route['model']` (no `default`) so a new model forces a decision here.
+ */
+export function effectivePm(route: Route, repoPm: PackageManager): PackageManager {
+  switch (route.model) {
+    case 'install':
+    case 'add':
+    case 'remove':
+    case 'update':
+    case 'auditFix':
+    case 'auditSignatures':
+      return route.pm;
+    case 'audit':
+    case 'run':
+      return repoPm;
+  }
+}
+
+/**
+ * The package manager whose contained install rebuilds `node_modules`, or undefined when the route
+ * writes no new tree (remove pulls nothing new; read-only audit/run touch no deps). Drives the
+ * cross-mode (host-native vs container) warning before a switch. Exhaustive over `Route['model']`
+ * (no `default`) so a new model forces a decision here.
+ */
+export function containerWritePm(route: Route): PackageManager | undefined {
+  switch (route.model) {
+    case 'install':
+    case 'add':
+    case 'update':
+    case 'auditFix':
+      return route.pm;
+    case 'remove':
+    case 'auditSignatures':
+    case 'audit':
+    case 'run':
+      return undefined;
+  }
 }

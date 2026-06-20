@@ -65,7 +65,24 @@ describe('classifyBareCommand', () => {
 
   it('block reason tells the agent how to re-run it', () => {
     const decision = classifyBareCommand('npm install');
-    expect(decision.reason).toContain('sandbox npm install');
+    expect(decision.reason).toContain('sandbox install');
+  });
+
+  it('suggests the simplified rerun forms for common commands', () => {
+    expect(classifyBareCommand('npm install zod').reason).toContain('sandbox add zod');
+    expect(classifyBareCommand('pnpm add zod').reason).toContain('sandbox add zod');
+    expect(classifyBareCommand('npm update').reason).toContain('sandbox update');
+    expect(classifyBareCommand('npm run dev').reason).toContain('sandbox dev');
+    expect(classifyBareCommand('npx vite').reason).toContain('sandbox x vite');
+  });
+
+  it('preserves the explicit passthrough form when simplification would drop semantics', () => {
+    expect(classifyBareCommand('npm ci').reason).toContain('sandbox npm ci');
+    expect(classifyBareCommand('pnpm install --frozen-lockfile').reason).toContain('sandbox pnpm install --frozen-lockfile');
+    expect(classifyBareCommand('npm install -D vitest').reason).toContain('sandbox npm install -D vitest');
+    expect(classifyBareCommand('npx -y cowsay hi').reason).toContain('sandbox npx -y cowsay hi');
+    expect(classifyBareCommand('npm exec -- tsc').reason).toContain('sandbox npm exec -- tsc');
+    expect(classifyBareCommand('FOO=bar sudo npm ci').reason).toContain('sandbox npm ci');
   });
 });
 
@@ -82,6 +99,12 @@ describe('HOOK_SCRIPT (the shipped hook, executed)', () => {
     const { status, stderr } = run(cmd);
     expect(status).toBe(2);
     expect(stderr).toContain('Blocked by sandbox');
+  });
+
+  it('prints a runnable rerun command for wrapped commands', () => {
+    const { stderr } = run('FOO=bar sudo npm ci');
+    expect(stderr).toContain('Re-run it as:  sandbox npm ci');
+    expect(stderr).not.toContain('sandbox FOO=bar sudo npm ci');
   });
 
   it.each(ALLOWED)('exits 0 (allow) for: %s', (cmd) => {

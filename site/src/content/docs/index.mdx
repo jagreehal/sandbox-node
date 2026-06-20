@@ -1,10 +1,10 @@
 ---
 title: sandbox
-description: Put sandbox in front of npm/pnpm/yarn/bun. Install scripts run in a throwaway container with no SSH keys, no npm token, no cloud creds, and a registry-only network.
+description: A supply-chain guard for npm/pnpm/yarn/bun. sandbox add vets a package before it installs (malware, typosquats, fresh-release worm window), then installs it in a throwaway container, so lifecycle scripts can't touch your host. Use check to vet without one.
 template: splash
 pagefind: false
 hero:
-  tagline: Run risky installs in a throwaway box. Your laptop secrets stay out.
+  tagline: Catch a bad dependency before it lands. sandbox add vets every dependency, then installs it contained. One mode per project.
 ---
 
 import Landing from '../../components/Landing.astro';

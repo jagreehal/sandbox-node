@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { classifyProjectMode, type ProjectMode } from './mode.js';
 
 /**
  * Cross-platform native-dependency detection.
@@ -79,17 +80,20 @@ function isDirectory(dir: string): boolean {
   }
 }
 
-function inspectPackageDir(dir: string, name: string, host: HostPlatform, found: Set<string>): void {
+/** Whether a platform-specific package directory should be collected, given whether it satisfies the host. */
+type Keep = (satisfies: boolean) => boolean;
+
+function inspectPackageDir(dir: string, name: string, host: HostPlatform, found: Set<string>, keep: Keep): void {
   const manifest = readManifest(dir);
   // No platform constraint at all -> not a platform-bound package.
   if (!manifest || (manifest.os === undefined && manifest.cpu === undefined)) return;
-  if (!hostSatisfies(manifest, host)) found.add(name);
+  if (keep(hostSatisfies(manifest, host))) found.add(name);
 }
 
-function scanNodeModulesDir(nodeModulesDir: string, host: HostPlatform, found: Set<string>): void {
+function scanNodeModulesDir(nodeModulesDir: string, host: HostPlatform, found: Set<string>, keep: Keep): void {
   for (const entry of safeReadDir(nodeModulesDir)) {
     if (entry === '.pnpm') {
-      scanPnpmVirtualStore(path.join(nodeModulesDir, entry), host, found);
+      scanPnpmVirtualStore(path.join(nodeModulesDir, entry), host, found, keep);
       continue;
     }
     if (entry.startsWith('.')) continue;
@@ -99,27 +103,30 @@ function scanNodeModulesDir(nodeModulesDir: string, host: HostPlatform, found: S
       for (const inner of safeReadDir(full)) {
         const pkgDir = path.join(full, inner);
         if (!isDirectory(pkgDir)) continue;
-        if (looksPlatformSpecific(inner)) inspectPackageDir(pkgDir, `${entry}/${inner}`, host, found);
+        if (looksPlatformSpecific(inner)) inspectPackageDir(pkgDir, `${entry}/${inner}`, host, found, keep);
         const nested = path.join(pkgDir, 'node_modules');
-        if (existsSync(nested)) scanNodeModulesDir(nested, host, found);
+        if (existsSync(nested)) scanNodeModulesDir(nested, host, found, keep);
       }
       continue;
     }
 
     if (!isDirectory(full)) continue;
-    if (looksPlatformSpecific(entry)) inspectPackageDir(full, entry, host, found);
+    if (looksPlatformSpecific(entry)) inspectPackageDir(full, entry, host, found, keep);
     const nested = path.join(full, 'node_modules');
-    if (existsSync(nested)) scanNodeModulesDir(nested, host, found);
+    if (existsSync(nested)) scanNodeModulesDir(nested, host, found, keep);
   }
 }
 
-function scanPnpmVirtualStore(storeDir: string, host: HostPlatform, found: Set<string>): void {
+function scanPnpmVirtualStore(storeDir: string, host: HostPlatform, found: Set<string>, keep: Keep): void {
   for (const entry of safeReadDir(storeDir)) {
     const nestedNodeModules = path.join(storeDir, entry, 'node_modules');
     if (!existsSync(nestedNodeModules)) continue;
-    scanNodeModulesDir(nestedNodeModules, host, found);
+    scanNodeModulesDir(nestedNodeModules, host, found, keep);
   }
 }
+
+const KEEP_INCOMPATIBLE: Keep = (satisfies) => !satisfies;
+const KEEP_NATIVE: Keep = (satisfies) => satisfies;
 
 /**
  * Find installed packages that can't load on `host` because their declared
@@ -135,7 +142,20 @@ function scanPnpmVirtualStore(storeDir: string, host: HostPlatform, found: Set<s
 export function findHostIncompatiblePackages(nodeModulesDir: string, host: HostPlatform): string[] {
   if (!existsSync(nodeModulesDir)) return [];
   const found = new Set<string>();
-  scanNodeModulesDir(nodeModulesDir, host, found);
+  scanNodeModulesDir(nodeModulesDir, host, found, KEEP_INCOMPATIBLE);
+  return [...found].sort();
+}
+
+/**
+ * The mirror image: platform-specific packages that DO satisfy `host` — i.e. native binaries built
+ * for this machine. Their presence means the tree is host-native (a local install), the signal the
+ * cross-mode check reads. Unlike a written marker it can't go stale: a contained install replaces
+ * these with Linux variants (so the count drops to zero), a later host install brings them back.
+ */
+export function findHostNativePackages(nodeModulesDir: string, host: HostPlatform): string[] {
+  if (!existsSync(nodeModulesDir)) return [];
+  const found = new Set<string>();
+  scanNodeModulesDir(nodeModulesDir, host, found, KEEP_NATIVE);
   return [...found].sort();
 }
 
@@ -153,12 +173,34 @@ function collectWorkspaceNodeModulesDirs(root: string, out: string[]): void {
   }
 }
 
-export function findHostIncompatiblePackagesInWorkspace(workspaceRoot: string, host: HostPlatform): string[] {
+function scanWorkspace(workspaceRoot: string, host: HostPlatform, keep: Keep): string[] {
   const nodeModulesDirs: string[] = [];
   collectWorkspaceNodeModulesDirs(workspaceRoot, nodeModulesDirs);
   const found = new Set<string>();
-  for (const nodeModulesDir of nodeModulesDirs) {
-    for (const pkg of findHostIncompatiblePackages(nodeModulesDir, host)) found.add(pkg);
-  }
+  for (const nodeModulesDir of nodeModulesDirs) scanNodeModulesDir(nodeModulesDir, host, found, keep);
   return [...found].sort();
+}
+
+export function findHostIncompatiblePackagesInWorkspace(workspaceRoot: string, host: HostPlatform): string[] {
+  return scanWorkspace(workspaceRoot, host, KEEP_INCOMPATIBLE);
+}
+
+/** Workspace-wide counterpart to {@link findHostNativePackages}: host-native packages across root + every workspace. */
+export function findHostNativePackagesInWorkspace(workspaceRoot: string, host: HostPlatform): string[] {
+  return scanWorkspace(workspaceRoot, host, KEEP_NATIVE);
+}
+
+/**
+ * The current dependency mode of a project, detected live from its `node_modules` (never a written
+ * marker, so it can't go stale). On Linux host and container share a platform, so host-native binaries
+ * are indistinguishable from container-built ones; we report `host-native` as false there and let the
+ * foreign/no-signal branches classify it. Shared by `setup`/`init` (the standalone mode line) and the
+ * pre-write orient line, so both read the same source of truth.
+ */
+export function detectProjectMode(cwd: string, host: HostPlatform = hostPlatform()): ProjectMode {
+  const hasDeps = existsSync(path.join(cwd, 'node_modules'));
+  if (!hasDeps) return classifyProjectMode({ hasDeps: false, hostNative: false, foreignNative: false });
+  const hostNative = host.os !== 'linux' && findHostNativePackagesInWorkspace(cwd, host).length > 0;
+  const foreignNative = findHostIncompatiblePackagesInWorkspace(cwd, host).length > 0;
+  return classifyProjectMode({ hasDeps: true, hostNative, foreignNative });
 }

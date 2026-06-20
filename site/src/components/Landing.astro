@@ -11,8 +11,9 @@ const protectedList = [
   ['Capabilities', '--cap-drop ALL, no-new-privileges, container-root ≠ host-root.'],
 ];
 const notProtected = [
-  ['Your source tree', 'Package managers need a writable root, so a malicious dep can still edit src/ during install. Use --frozen for a read-only tree, and review git diff.'],
+  ['Your source tree', 'Even in the container, package managers need a writable root, so a malicious dep can still edit src/ during install. Use --frozen for a read-only tree, and review git diff.'],
   ['Anything you grant', 'ssh-agent, paths, env, network. Grant the minimum; prefer ssh-agent over key files.'],
+  ['A package not yet flagged', 'The gates catch known-bad versions. A malicious version no advisory has seen yet still installs, but it installs contained, so it runs against the box, not your host.'],
 ];
 const workflows = [
   ['Vet a package before installing', 'check', 'A read-only review pass (no Docker): OSV advisories, typosquats, fresh/deprecated versions, all before a byte is fetched.', `${base}/vetting/`],
@@ -22,35 +23,46 @@ const workflows = [
 ---
 
 <section class="band">
-  <h2 class="band__title">Add one word. Keep your workflow.</h2>
+  <h2 class="band__title">Start with sandbox add.</h2>
   <p class="band__lede">
-    sandbox auto-detects your package manager and mirrors it: install, add, update, audit fix,
-    one-off tools. Anything that pulls <em>new</em> versions runs through the same supply-chain gates
-    (release-age cooldown, OSV malware check, risk hints) before the bytes are fetched.
+    <code>sandbox add zod</code> and <code>sandbox install</code> are the everyday path. They auto-detect
+    npm/pnpm/yarn/bun, run every target version through the supply-chain gates (release-age cooldown, OSV
+    malware, risk hints) <em>before a byte is fetched</em>, then install in a throwaway container. Each
+    contained write opens with one orient line: <code>pnpm · container-built deps · contained</code>. Your
+    real <code>pnpm</code> is never shadowed.
   </p>
   <div class="works">
-    {['npm install', 'pnpm add zod', 'yarn upgrade', 'bun install', 'npx vite', 'npm audit fix'].map((c) => (
-      <code class="works__pill"><span>sandbox</span> {c}</code>
+    {['sandbox add zod', 'sandbox install', 'sandbox check express', 'sandbox devcontainer init'].map((c) => (
+      <code class="works__pill">{c}</code>
+    ))}
+  </div>
+  <p class="band__lede" style="margin-top: var(--space-2xl); margin-bottom: var(--space-lg);">
+    Expert shortcut: the per-PM binaries are the same gated native path with shorter keystrokes.
+    <code>spnpm add zod</code> is just <code>sandbox pnpm add zod</code>.
+  </p>
+  <div class="works">
+    {['sandbox-pnpm add zod', 'spnpm install', 'snpx vite', 'sandbox-npm ci'].map((c) => (
+      <code class="works__pill">{c}</code>
     ))}
   </div>
 </section>
 
 <section class="band">
-  <h2 class="band__title">Honest about the boundary</h2>
-  <p class="band__lede">The whole sale is trust, so the line stays in plain sight: what sandbox protects, and what stays writable.</p>
+  <h2 class="band__title">Honest about what protects you</h2>
+  <p class="band__lede">The whole sale is trust, so the line stays in plain sight. Every install vets the target versions first. The throwaway container is the real boundary when you ask for it with explicit sandbox package-manager syntax or a devcontainer. Here is exactly what that boundary covers and the one thing it does not.</p>
   <div class="panels">
     <div class="panel panel--yes">
-      <p class="panel__head"><span class="panel__mark">✓</span> Protected by default</p>
+      <p class="panel__head"><span class="panel__mark">✓</span> In the container (when you opt in)</p>
       <dl>
         {protectedList.map(([t, d]) => (<><dt>{t}</dt><dd>{d}</dd></>))}
       </dl>
     </div>
     <div class="panel panel--no">
-      <p class="panel__head"><span class="panel__mark panel__mark--ochre">!</span> Not protected by default</p>
+      <p class="panel__head"><span class="panel__mark panel__mark--ochre">!</span> Not protected</p>
       <dl>
         {notProtected.map(([t, d]) => (<><dt>{t}</dt><dd>{d}</dd></>))}
       </dl>
-      <p class="panel__foot">sandbox blocks credential theft, persistence, and exfiltration. It leaves source edits to you. We’d rather say so than imply otherwise.</p>
+      <p class="panel__foot">The gates catch known-bad packages and the container contains the rest. We’d rather say where the line is than imply there isn’t one.</p>
     </div>
   </div>
 </section>
@@ -59,18 +71,18 @@ const workflows = [
   <h2 class="band__title">Security that stays out of the way</h2>
   <p class="band__lede">A clean install barely says anything. A finding is specific and tells you exactly what to do. Real output:</p>
   <div class="shots">
-    <pre class="shot"><code><span class="c-dim">$ sandbox pnpm add zod</span>
-<span class="c-ok">✓ done, ran in a throwaway sandbox, now deleted;</span>
-<span class="c-ok">  it never had your credentials or home dir</span></code></pre>
+    <pre class="shot"><code><span class="c-dim">$ sandbox add zod</span>
+<span class="c-ok">✓ gates passed, installing natively</span>
+<span class="c-ok">  on the host</span></code></pre>
     <pre class="shot"><code><span class="c-ochre">sandbox: 1 thing worth a look before installing</span>
 <span class="c-ochre">  left-pad@99.0.0</span>
 <span class="c-dim">  !! very recently published 2 hours ago</span>
-<span class="c-dim">heads-up only, the install runs in a throwaway</span>
-<span class="c-dim">container. Continuing.</span></code></pre>
-    <pre class="shot"><code><span class="c-dim">sandbox blocked 1 request to a host not on your</span>
+<span class="c-dim">heads-up only. Continuing. Use explicit sandbox</span>
+<span class="c-dim">pnpm add left-pad for the throwaway container.</span></code></pre>
+    <pre class="shot"><code><span class="c-dim">$ sandbox add zod   (contained)</span>
+<span class="c-dim">sandbox blocked 1 request to a host not on your</span>
 <span class="c-dim">allowlist:</span>
 <span class="c-ochre">  ⚠ telemetry.example.com, not a known registry</span>
-<span class="c-ochre">    or build host</span>
 <span class="c-dim">Allow once · save for the team · cancel?</span></code></pre>
   </div>
 </section>
@@ -101,6 +113,10 @@ const workflows = [
 
   .panels { display: grid; gap: var(--space-xl); grid-template-columns: 1fr; }
   @media (min-width: 48rem) { .panels { grid-template-columns: 1fr 1fr; } }
+  /* Starlight's splash body adds a top margin to consecutive siblings (.sl-markdown-content * + *).
+     These grids space via `gap`, so that inherited margin only offsets the 2nd+ item (it pushed the
+     "Not protected" panel below "In the container"). This component owns its spacing, so zero it out. */
+  .panels > *, .shots > *, .flows > * { margin-top: 0; }
   .panel { border: 1px solid var(--sbx-border); border-radius: var(--sbx-radius); padding: var(--space-2xl); background: var(--sbx-surface); }
   .panel--no { background: color-mix(in oklch, var(--sbx-ochre) 7%, var(--sl-color-bg)); border-color: color-mix(in oklch, var(--sbx-ochre) 30%, var(--sbx-border)); }
   .panel__head { display: flex; align-items: center; gap: 0.6ch; font-weight: 700; font-size: 1.05rem; margin: 0 0 var(--space-lg); color: var(--sl-color-white); font-family: var(--sbx-font-display); }
@@ -114,8 +130,8 @@ const workflows = [
   .shots { display: grid; gap: var(--space-lg); grid-template-columns: 1fr; }
   @media (min-width: 52rem) { .shots { grid-template-columns: repeat(3, 1fr); } }
   .shot { margin: 0; background: var(--sbx-term-bg); border: 1px solid var(--sbx-border); border-radius: var(--sbx-radius); padding: var(--space-lg); font-family: var(--sl-font-mono); font-size: 0.76rem; line-height: 1.65; overflow-x: auto; }
-  .shot code { background: none; border: 0; padding: 0; color: var(--sl-color-gray-2); white-space: pre; }
-  .c-dim { color: var(--sl-color-gray-4); }
+  .shot code { background: none; border: 0; padding: 0; color: var(--sbx-term-fg); white-space: pre; }
+  .c-dim { color: color-mix(in oklch, var(--sbx-term-fg) 62%, transparent); }
   .c-ok { color: var(--sbx-accent-bright); }
   .c-ochre { color: var(--sbx-ochre); }
 

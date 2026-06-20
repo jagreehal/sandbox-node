@@ -5,25 +5,28 @@ Entry point for AI coding agents working in this repository. Follows the [`AGENT
 ## Read this first
 
 - This file: orientation, the product's one job, the output voice, how to build/test, code conventions, repo layout, releasing.
-- [`README.md`](README.md): what the tool is and the user-facing surface. The mermaid diagram at the top is the whole pitch: a throwaway box that sees your project + the registry and nothing else.
+- [`docs/rfc-native-default.md`](docs/rfc-native-default.md): the accepted pivot that defines the current product story (gate-first, native-default, container on demand). Read it before touching install routing, the `sandbox-<pm>` binaries, or the thesis docs.
+- [`README.md`](README.md): what the tool is and the user-facing surface.
 - [`docs/reference.md`](docs/reference.md): the full command and config reference.
 - [`sandbox.schema.json`](sandbox.schema.json): the config manifest schema. **Generated** by `pnpm gen:schema` from `src/config.ts`; never hand-edit it.
 - [`SECURITY.md`](SECURITY.md): the threat model and what is / isn't protected. Read before touching anything in `proxy/`, `net-guard.sh`, or the mount/egress logic.
 
 ## The one job: keep it in view
 
-sandbox-node puts `sandbox` in front of `npm`/`pnpm`/`yarn`/`bun` and runs the install inside a throwaway Docker/Podman container: no host credentials, default-deny egress, lifecycle scripts contained, `--cap-drop ALL`. **The container boundary is the product.** Everything else (the supply-chain gates, the risk hints, the receipts) is supporting cast around that boundary.
+sandbox-node **catches a bad dependency before it lands** and **contains it on demand**. The everyday product is the **gate engine**: before an install fetches anything, it checks the target versions against OSV malware advisories, your malware feeds + team advisories (hard block), typosquats, the release-age worm window (with safe-install substitution), and deprecation. Then it installs **natively on the host** by default, so your IDE and tools get host-native binaries and just work. **The gate engine is the product.** When you don't trust the code, one opt-in (`--sandbox`, `sandbox <pm>`, or `sandbox devcontainer init`) runs the whole thing in a throwaway Docker/Podman container: no host credentials, default-deny egress, `--cap-drop ALL`. The container is the strongest protection, but it's the **on-demand boundary**, not the everyday path.
 
-Two design rules fall straight out of this and govern most decisions:
+The honest line, hold it everywhere: native install runs lifecycle scripts on the host, so the gates are **heuristics, not a boundary**. The container is the boundary; reach for it when trust drops. The one surface still NOT protected, even in the container, is the writable source tree (a malicious install can edit `src/`; `--frozen` locks it). (See [`docs/rfc-native-default.md`](docs/rfc-native-default.md).)
 
-- **Put `sandbox` in front of what you already type; never invent vocabulary.** The user runs `sandbox pnpm add zod`, not a sandbox-specific verb. `src/dispatch.ts` translates any PM/runner command into one of a few containment models (install / add / remove / update / audit / run). When you add a capability, prefer making an existing command do the right thing over adding a new command or flag. Auto-detect and mirror the user's package manager; do not ask.
-- **Security is invisible until it needs you.** A clean install says almost nothing; a finding is loud and specific. We do not narrate the boundary doing its job.
+Two design rules govern most decisions:
+
+- **Same keystrokes as the package manager; never invent vocabulary.** Default surface is the `sandbox-<pm>` / `s<pm>` binaries (`sandbox-pnpm add zod` / `spnpm add zod` = vet, then native install) and the explicit `sandbox <pm>` form (always containerized). `src/dispatch.ts` translates any PM/runner command into one of a few models (install / add / remove / update / audit / run); `src/native.ts` runs them natively, `src/execute.ts` in the container. When you add a capability, prefer making an existing command do the right thing over adding a new command or flag. Auto-detect and mirror the user's package manager; do not ask. **Never shadow the user's real `npm`/`pnpm`** (the removed `path install` takeover is the anti-pattern); they opt in by typing a prefix.
+- **Security is invisible until it needs you.** A clean install says almost nothing; a finding is loud and specific. We do not narrate the gates (or the boundary) doing their job.
 
 ## Design philosophy: read before adding a feature, flag, or config key
 
 - **Honest docs and honest output.** Never oversell. If something is *not* protected (e.g. the source tree stays writable during an install), say so plainly; see the "NOT protected by default" section of the README. A claim the code can't back is a bug. The egress proxy in particular: describe what it actually blocks, not an idealized version.
 - **Human-in-the-loop: action + a plain "why".** Every consequential line tells the user what is about to happen and, in one plain clause, why, so they stay in control. The one decision point that asks (blocked egress) classifies each host with a real reason (`nodejs.org — Node headers for compiling native modules`) so the choice is informed, not a rubber stamp. See `src/hosts.ts` and `src/interactive.ts`.
-- **The security gradient is deliberate.** Protected by default: credentials, persistence paths (`.git`, `.github`, `.husky`, `.claude`, …, and `package.json` are read-only), egress (default-deny allowlist), capabilities. NOT protected by default: the writable source tree (a malicious install can edit `src/`; `--frozen` locks it). Don't quietly change where a surface sits on that gradient; that's a product decision the maintainer owns.
+- **The security gradient is deliberate.** Always on (every path, no Docker needed): `sandbox check`/`preflight` vet target versions before fetch and install nothing. By default the install then runs natively, so it's only as strong as the gates. Opt into the container (`--sandbox` / `sandbox <pm>` / devcontainer) and you add the real boundary: credentials, persistence paths, egress allowlist, capabilities. NOT protected even in the container: the writable source tree (a malicious install can edit `src/`; `--frozen` locks it). Don't quietly change where a surface sits on that gradient; those are product decisions the maintainer owns.
 - **Don't add a new package manager to the `PackageManager` union casually.** It is `'npm' | 'pnpm' | 'yarn' | 'bun'` and threads through ~a dozen exhaustive switches and `Record<PackageManager, …>` maps. Adding a member is a real, repo-wide change. (We evaluated wrapping `nub` as a runner and removed it: redundant inside the box, couldn't be explained in one sentence, disproportionate routing/test cost. Don't reopen without that bar cleared.)
 
 ## Build, test, and run
@@ -44,7 +47,7 @@ pnpm dev -- <args>      # tsx src/cli.ts <args> (run the CLI from source)
   - `check:repo-metadata`: `package.json` keeps `packageManager` pinned and `publishConfig` public + provenance on.
 - **Integration tests need Docker** (they self-skip when no runtime is found) and a built `dist/`. Unit tests need neither.
 - **`--dry-run` is your no-Docker inspection tool.** `pnpm dev -- --dry-run pnpm add zod` prints the resolved plan (mounts, network, grants) without building or running anything. Use it to verify routing and containment changes fast.
-- **Gotcha if this repo has `sandbox path install` wired in your shell:** bare `npm`/`pnpm`/`yarn`/`bun`/`npx` get routed *through sandbox into a container*, which will surprise you when you meant to run the repo's own toolchain. Run the real tool with `command pnpm …`, or `SANDBOX_OFF=1 pnpm …`, or call the binary directly (`./node_modules/.bin/vitest`). This is the tool eating its own dog food; it's expected, not a bug.
+- **No shell takeover.** The tool never shadows your `npm`/`pnpm`/`yarn`/`bun`, so bare commands run the repo's own toolchain as normal. To route a command through sandbox you type it explicitly: `sandbox pnpm install` (container), or the per-PM binaries `sandbox-pnpm`/`spnpm` (vet, then native install; `--sandbox` to containerize).
 
 ## Code conventions
 
@@ -58,14 +61,14 @@ pnpm dev -- <args>      # tsx src/cli.ts <args> (run the CLI from source)
 
 This is the product's personality. Hold the bar:
 
-- **Action + plain why, in one line.** Not "continuing inside containment" (jargon) but "the install runs in a throwaway container, so this code can't reach your credentials or home dir."
+- **Action + plain why, in one line.** Not "continuing inside containment" (jargon) but "running in a throwaway container, so this code can't reach your credentials or home dir" or, after a contained install on macOS/Windows, "node_modules targets the Linux container; run tools with `sandbox test`, or your own install for a host-native tree."
 - **Invisible when clean, clear when it matters.** A gate that finds nothing should stay quiet (debug), not narrate. A gate that finds something leads with what and why, and states the reason once, never repeating a reassurance on every line.
 - **The escape hatch is always one keystroke away and always named:** `command <tool>`, `SANDBOX_OFF=1`, `sandbox off`. Never trap the user.
 - **No em dashes in user-facing text.** House punctuation uses periods, commas, colons, and parentheses instead. Be terse and confident; cut filler. This covers the docs site, the README, and the CLI output/help strings in `src/`, so doc transcripts of real output match the binary. Code comments may keep em dashes as internal rationale.
 
 ## Repo layout
 
-- `src/`: ~50 single-concern modules. Entry: `cli.ts` (argv parse + dispatch + effects). Routing: `dispatch.ts`. Plans/containment: `plan.ts`, `execute.ts`, `backend.ts`, `network.ts`. Supply-chain: `risk.ts`, `preflight.ts`, `advisory.ts`, `scan.ts`, `delta.ts`. Config: `config.ts`, `presets.ts`, `init.ts`, `setup.ts`. Surfaces: `doctor.ts`, `verify.ts`, `receipt.ts`, `secrets.ts`, `path-setup.ts`, `hosts.ts`, `interactive.ts`, `log.ts`.
+- `src/`: ~50 single-concern modules. Entry: `cli.ts` (argv parse + dispatch + effects). Routing: `dispatch.ts`. Plans/containment: `plan.ts`, `execute.ts`, `backend.ts`, `network.ts`. Supply-chain: `risk.ts`, `preflight.ts`, `advisory.ts`, `scan.ts`, `delta.ts`. Config: `config.ts`, `presets.ts`, `init.ts`, `setup.ts`. Surfaces: `doctor.ts`, `verify.ts`, `receipt.ts`, `secrets.ts`, `native.ts`, `mode.ts`, `hosts.ts`, `interactive.ts`, `log.ts`.
 - `src/repo-checks/`: the logic behind `pnpm check:repo` (import cycles, install policy, manifest metadata).
 - `test/`: unit tests (fast, no Docker). `test/integration/`: golden CLI + Docker tests (opt-in, slow).
 - `scripts/`: `gen-schema.ts` (regenerates `sandbox.schema.json`), `gen-top-packages.mjs` (typosquat corpus), the three `check-*.ts` repo gates.

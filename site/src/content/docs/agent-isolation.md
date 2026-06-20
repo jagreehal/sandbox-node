@@ -22,7 +22,7 @@ This writes:
 - `.sandbox/AGENT.md`: instructions to paste into the agent's project rules.
 - A `PreToolUse` hook wired into `.claude/settings.json` that **enforces** them and denies the agent reading `.env` and secrets.
 
-The hook blocks any bare package-manager install/exec or fetch-and-run runner (`npm/pnpm/yarn/bun install · add · run · exec · update · uninstall · …`, bare `yarn`, and `npx/pnpx/bunx`) and tells the agent to re-run it as `sandbox <cmd>`. Read-only queries (`npm ls`, `npm view`) stay allowed.
+The hook blocks any bare package-manager install/exec or fetch-and-run runner (`npm/pnpm/yarn/bun install · add · run · exec · update · uninstall · …`, bare `yarn`, and `npx/pnpx/bunx`) and tells the agent to re-run it through `sandbox`, leading with `sandbox install`, `sandbox add <pkg>`, or `sandbox update`. Read-only queries (`npm ls`, `npm view`) stay allowed.
 
 :::caution[Enforcement beats instructions]
 `.sandbox/AGENT.md` only *asks*. The hook *enforces*. Setup prints whether `.claude/settings.json` was wired; if it says the file wasn't valid JSON, the hook is **not** active. Fix that file and merge the printed snippet, or you only have advice.

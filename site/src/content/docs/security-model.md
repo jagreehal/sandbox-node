@@ -34,7 +34,7 @@ We'd rather state this than imply a guarantee the tool can't keep.
 | --- | --- |
 | `strict` | Frozen installs, 7-day release-age gate, malware blocking, thorough risk hints, canaries on. CI and untrusted code. |
 | `agent` | Blocking release-age gate, canaries on, project-local Claude config, full network for `run`. For repos you hand to a coding agent. |
-| `balanced` | The sensible default: contained installs, default-deny egress, advisory risk hints. |
+| `balanced` | The sensible default: native installs, advisory risk hints, container boundary on demand. |
 | `vibe` | Dev-friendly: network and common dev ports open for `run`. |
 | `trusted` | Full network, ssh-agent, project Claude config. For repos you already trust. |
 

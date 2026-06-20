@@ -28,10 +28,10 @@ const examples = [
 ];
 
 const execProofs = [
-  { label: 'npm-exec', cwd: 'npm', planArgs: ['npx', '--yes', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', '--full-network', 'npx', '--yes', 'cowsay', 'sandbox'], expectArgv: ['npx', '--yes', 'cowsay', 'sandbox'] },
-  { label: 'pnpm-dlx', cwd: 'pnpm', planArgs: ['pnpm', 'dlx', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', '--full-network', 'pnpm', 'dlx', 'cowsay', 'sandbox'], expectArgv: ['pnpm', 'dlx', 'cowsay', 'sandbox'] },
-  { label: 'yarn-dlx', cwd: 'yarn', planArgs: ['yarn', 'dlx', 'cowsay', 'sandbox'], expectArgv: ['yarn', 'dlx', 'cowsay', 'sandbox'] },
-  { label: 'bunx', cwd: 'bun', planArgs: ['bunx', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', '--full-network', 'bunx', 'cowsay', 'sandbox'], expectArgv: ['bunx', 'cowsay', 'sandbox'] },
+  { label: 'npm-exec', cwd: 'npm', planArgs: ['npx', '--yes', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', 'npx', '--yes', 'cowsay', 'sandbox'], expectArgv: ['npx', '--yes', 'cowsay', 'sandbox'] },
+  { label: 'pnpm-dlx', cwd: 'pnpm', planArgs: ['pnpm', 'dlx', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', 'pnpm', 'dlx', 'cowsay', 'sandbox'], expectArgv: ['pnpm', 'dlx', 'cowsay', 'sandbox'] },
+  { label: 'yarn-dlx', cwd: 'yarn', planArgs: ['yarn', 'dlx', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', 'yarn', 'dlx', 'cowsay', 'sandbox'], expectArgv: ['corepack', 'yarn@4.14.1', 'dlx', 'cowsay', 'sandbox'] },
+  { label: 'bunx', cwd: 'bun', planArgs: ['bunx', 'cowsay', 'sandbox'], realArgs: ['--risk', 'off', 'bunx', 'cowsay', 'sandbox'], expectArgv: ['bunx', 'cowsay', 'sandbox'] },
 ];
 
 function exampleDir(dir) {
@@ -110,7 +110,7 @@ function cleanRealArtifacts(dir) {
 function assertExecPlan({ label, cwd, planArgs, expectArgv }) {
   const resolved = planCommand(cwd, planArgs);
   const problems = [];
-  if (resolved.network !== 'none') problems.push(`network=${resolved.network} (expected none by default for fetch-and-run)`);
+  if (resolved.network !== 'allowlist') problems.push(`network=${resolved.network} (expected allowlist for fetch-and-run)`);
   if (!startsWith(resolved.argv, expectArgv)) problems.push(`argv starts with ${resolved.argv.join(' ')} (expected ${expectArgv.join(' ')})`);
   if (resolved.workdir !== '/workspace') problems.push(`workdir=${resolved.workdir} (expected /workspace)`);
   return { label, resolved, problems };
@@ -236,7 +236,7 @@ for (const proof of execProofs) {
         failures += 1;
         for (const problem of result.problems) console.error(`     ${problem}`);
       } else {
-        console.log('     proof: fetch-and-run works once run networking is deliberately widened');
+        console.log('     proof: fetch-and-run works on the default registry allowlist');
       }
     } catch (error) {
       failures += 1;

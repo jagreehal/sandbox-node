@@ -111,3 +111,14 @@ export function summarizeUnexpectedChanges(before: TreeSnapshot, after: TreeSnap
   }
   return [...changed].filter((file) => !shouldSkip(file) && !isExpectedProjectWrite(file, kind)).sort();
 }
+
+/**
+ * The exit code for a run that may have written to the source tree. Pure, so the tripwire rule is
+ * testable. This is detection AFTER the fact, not prevention: the tree is writable by design (a package
+ * manager needs a writable root), so a malicious script CAN edit `src/`. When the tripwire is armed and
+ * an otherwise-clean run nonetheless touched source files, we fail it so CI or an agent notices and
+ * reverts. A run that already failed keeps its own non-zero code (the source write is the lesser news).
+ */
+export function sourceWriteExit(code: number, unexpectedChangeCount: number, failOnSourceWrites: boolean): number {
+  return failOnSourceWrites && unexpectedChangeCount > 0 && code === 0 ? 1 : code;
+}
