@@ -3,11 +3,11 @@ title: Commands
 description: The sandbox command surface. The passthrough you already know, plus the sandbox-only commands for setup, vetting, and CI.
 ---
 
-The default write path: **`sandbox install`, `sandbox add <pkg>`, `sandbox update`.** Each one auto-detects your package manager, vets the target versions, then installs natively on the host. The explicit `sandbox <pm>` form is the contained twin when you want the boundary. Everything below the passthrough table is sugar or a sandbox-only command.
+The default write path: **`sandbox install`, `sandbox add <pkg>`, `sandbox update`.** Each one auto-detects your package manager, vets the target versions, then installs mode-aware: native on a fresh or host-native project, contained when the tree already is container-built. The explicit `sandbox <pm>` form is the contained twin when you want the boundary. Everything below the passthrough table is sugar or a sandbox-only command.
 
 ## Passthrough: your package manager, vetted first
 
-sandbox auto-detects npm, pnpm, yarn, or bun and runs the natural command for that project. `sandbox add zod` and `spnpm add zod` vet the target versions, then run the install natively on the host. The explicit `sandbox pnpm add zod` form uses the throwaway container boundary.
+sandbox auto-detects npm, pnpm, yarn, or bun and runs the natural command for that project. `sandbox add zod` and `spnpm add zod` vet the target versions, then follow the project's current mode. The explicit `sandbox pnpm add zod` form uses the throwaway container boundary.
 
 | | install | add / remove | update / dedupe | audit | run / exec |
 | --- | --- | --- | --- | --- | --- |
@@ -29,11 +29,12 @@ sandbox script build      # run a script whose name collides with a sandbox comm
 
 ## Expert: per-PM shortcuts
 
-Same gated native path, shorter keystrokes. The `sandbox-<pm>` / `s<pm>` binaries mirror your package manager while keeping the gate engine in front.
+Same gated, mode-aware path, shorter keystrokes. The `sandbox-<pm>` / `s<pm>` binaries mirror your package manager while keeping the gate engine in front.
 
 ```bash
-sandbox-pnpm add zod      # = sandbox pnpm add zod
+sandbox-pnpm add zod      # per-PM front-end: gated, then mode-aware
 spnpm add zod             # terse alias for sandbox-pnpm
+sandbox pnpm add zod      # explicit throwaway-container boundary
 snpm uninstall left-pad   # sandbox-npm
 snpx vite                 # sandbox-npx, one-off tool
 sbun add hono             # sandbox-bun

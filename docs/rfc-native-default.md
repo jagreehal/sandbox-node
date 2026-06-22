@@ -6,11 +6,13 @@ explicit boundary when trust drops. `check` vets without installing, a project's
 in exactly one mode at a time, and `devcontainer init` gives you containment and a happy IDE
 together.
 
-> An earlier iteration of this pivot tried "vet by default, install natively on the host, container on
-> `--sandbox`." It was abandoned: native install made the container a boundary only on an opt-in (the
-> gates alone are heuristics), and the host-tree reconciliation step (`sandbox materialize`) was
-> fragile (a no-op on a frozen pnpm tree, and a second place for the two trees to disagree). The model
-> below replaces it. `--sandbox`, the native-install path, and `sandbox materialize` are all removed.
+> An earlier iteration tried "vet by default, install natively on the host, container on `--sandbox`,"
+> with a `sandbox materialize` step to reconcile the host tree. The reconciliation was fragile (a no-op
+> on a frozen pnpm tree, and a second place for the two trees to disagree), so `--sandbox` and
+> `sandbox materialize` are gone for good. The model below keeps native install as the default but makes
+> it **mode-aware** instead of flag-gated: the install picks native vs container from the project's one
+> live-detected mode (never two trees, never a reconcile step), and the explicit `sandbox <pm>` form is
+> the deliberate force-container escape hatch.
 
 ## The decision
 
@@ -23,13 +25,16 @@ sandbox-node has two jobs:
    container, so lifecycle scripts never touch the host. No host credentials, default-deny egress,
    `--cap-drop ALL`.
 
-So `spnpm add zod` vets, then installs natively on the host. `sandbox pnpm add zod` vets, then installs
-contained. `sandbox check express` vets without a container (no Docker), and installs nothing: the
-read-only review pass.
+So `spnpm add zod` (and the friendly `sandbox add zod`) vets, then installs **mode-aware**: natively on
+a host-native or fresh project, contained when the project's `node_modules` is already a container
+build. `sandbox pnpm add zod` (the explicit package-manager form) vets, then **always** installs
+contained: the boundary on demand. `sandbox check express` vets without a container (no Docker), and
+installs nothing: the read-only review pass.
 
-Because the default path is native, the honest line is stricter than the old contained-default story:
-the default has **heuristic gates, not a boundary**. The one surface still NOT protected, even in the
-container, is the writable source tree (a malicious install can edit `src/`; `--frozen` locks it).
+Because the default path is native (for a fresh or host-native project), the honest line is stricter
+than a contained-default story: that default has **heuristic gates, not a boundary**. The one surface
+still NOT protected, even in the container, is the writable source tree (a malicious install can edit
+`src/`; `--frozen` locks it).
 
 ## One mode per project
 
@@ -40,15 +45,25 @@ A project's `node_modules` is in exactly one mode at a time, never both and neve
 - **container:** a Linux tree built by a contained install (`spnpm install` / `sandbox <pm>`), so
   lifecycle scripts stayed in the box.
 
-We detect the mode from the tree itself and warn on a cross-mode action instead of maintaining two
-trees. The signal is the platform of the installed native packages, read live (not a written marker):
-a host-native tree has native binaries built for the host, a container tree has Linux ones. A written
-sentinel would survive a later host install and go stale (wrongly suppressing the warning); reading
-the live tree can't.
+We detect the mode from the tree itself and route the next install to match it instead of maintaining
+two trees. The signal is the platform of the installed native packages, read live (not a written
+marker): a host-native tree has native binaries built for the host, a container tree has Linux ones. A
+written sentinel would survive a later host install and go stale (wrongly suppressing the warning);
+reading the live tree can't.
 
-- **local → container:** before a contained install clobbers a host-native tree with a Linux one the
-  IDE can't load, we warn (and on a TTY ask to confirm the switch). Non-interactively (CI/agents) the
-  warning is logged and the install proceeds. (On Linux there is no mismatch, so no warning.)
+The routing is a pure decision: `chooseInstallTarget(mode, forceContainer)` in `src/mode.ts` returns
+`container` for a `container-built` tree (or whenever the user forced it), and `native` for everything
+else (`host-native`, fresh `no-deps`, or a tree with no native signal), so a fresh project gets the
+best DX (a host tree the IDE loads) and the gates run either way. There is no node_modules volume on the
+everyday path: a contained install bind-mounts the project and writes `node_modules` straight through to
+the host as a Linux tree (which is exactly why one-mode-per-project exists). Only `sandbox devcontainer
+init` mounts `node_modules` as a named volume so the editor and the deps both live in Linux.
+
+- **local → container:** mode-aware install keeps a host-native tree native, so it is never silently
+  clobbered. Only the explicit force-container form (`sandbox <pm>`) can rebuild a host-native tree as a
+  Linux one the IDE can't load; before it does, we warn (and on a TTY ask to confirm the switch).
+  Non-interactively (CI/agents) the warning is logged and the install proceeds. (On Linux there is no
+  mismatch, so no warning.)
 - **container → host tool:** a host tool loading a Linux tree is caught by the same native-deps
   platform check, which names the foreign-native packages and points at the options.
 
@@ -66,8 +81,10 @@ sandbox-npm   sandbox-pnpm   sandbox-yarn   sandbox-bun   sandbox-npx   sandbox-
 ```
 
 `sandbox-pnpm add zod` (or `spnpm add zod`) is the exact keystrokes of `pnpm add zod`, just a clear
-prefix that vets and contains. They are thin front-ends for `sandbox <pm>`, so they always
-containerize. Your real `pnpm` is never shadowed; you opt in by typing the prefix.
+prefix that vets, then installs mode-aware. They are muscle-memory front-ends for the friendly write
+path (`sandbox add`/`install`/`update`), so they pick native vs container from the project's detected
+mode; the explicit `sandbox <pm>` form is the one that **always** containerizes (the boundary on
+demand). Your real `pnpm` is never shadowed; you opt in by typing the prefix.
 
 - Install/add/update get the gates; run/exec/dlx just run (the same dispatch models as `sandbox <pm>`).
 - For agents we keep enforcement: the `init --agent` PreToolUse hook rewrites a bare `pnpm install` to

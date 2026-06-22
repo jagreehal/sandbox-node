@@ -204,22 +204,48 @@ export function effectivePm(route: Route, repoPm: PackageManager): PackageManage
 }
 
 /**
- * The package manager whose contained install rebuilds `node_modules`, or undefined when the route
- * writes no new tree (remove pulls nothing new; read-only audit/run touch no deps). Drives the
- * cross-mode (host-native vs container) warning before a switch. Exhaustive over `Route['model']`
- * (no `default`) so a new model forces a decision here.
+ * The package manager for a route that mutates `node_modules` (install/add/update/remove/auditFix), or
+ * undefined when the route writes no tree (read-only audit/run). Drives the mode-aware write path: which
+ * routes pick native vs container, and the cross-mode warning before a forced-container write. `remove`
+ * is included because dropping a dependency rewrites the tree too and must stay in the project's one
+ * mode. Exhaustive over `Route['model']` (no `default`) so a new model forces a decision here.
  */
-export function containerWritePm(route: Route): PackageManager | undefined {
+export function modeAwareWritePm(route: Route): PackageManager | undefined {
   switch (route.model) {
     case 'install':
     case 'add':
     case 'update':
     case 'auditFix':
-      return route.pm;
     case 'remove':
+      return route.pm;
     case 'auditSignatures':
     case 'audit':
     case 'run':
       return undefined;
+  }
+}
+
+/**
+ * The present-progressive verb for a route's action line ("installing", "removing", …), so the one-line
+ * write announcement names the actual operation instead of always saying "installing" (a `remove`
+ * shouldn't announce an install). Exhaustive over `Route['model']` (no `default`); the read-only models
+ * never reach the write action line but are mapped to a sensible word for completeness.
+ */
+export function writeVerb(route: Route): string {
+  switch (route.model) {
+    case 'install':
+      return 'installing';
+    case 'add':
+      return 'adding';
+    case 'update':
+      return 'updating';
+    case 'remove':
+      return 'removing';
+    case 'auditFix':
+      return 'fixing';
+    case 'auditSignatures':
+    case 'audit':
+    case 'run':
+      return 'running';
   }
 }

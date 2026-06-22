@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyProjectMode, crossModeWarning, orientLine } from '../src/mode.js';
+import { chooseInstallTarget, classifyProjectMode, crossModeWarning, writeActionLine } from '../src/mode.js';
 
 describe('crossModeWarning', () => {
   it('warns when a host-native tree is about to be clobbered by a contained install', () => {
@@ -62,20 +62,44 @@ describe('classifyProjectMode', () => {
   });
 });
 
-describe('orientLine', () => {
-  it('is one terse clause: pm, mode, containment', () => {
-    expect(orientLine({ pm: 'pnpm', mode: 'container-built', contained: true })).toBe('pnpm · container-built deps · contained');
+describe('chooseInstallTarget', () => {
+  it('keeps a container-built tree contained (one mode per project)', () => {
+    expect(chooseInstallTarget('container-built', false)).toBe('container');
   });
 
-  it('reflects each mode and the package manager', () => {
-    expect(orientLine({ pm: 'npm', mode: 'no-deps', contained: true })).toBe('npm · no deps yet · contained');
-    expect(orientLine({ pm: 'yarn', mode: 'host-native', contained: true })).toBe('yarn · host-native deps · contained');
-    expect(orientLine({ pm: 'bun', mode: 'deps-without-native-signal', contained: true })).toBe('bun · deps installed · contained');
+  it('installs natively for host-native, fresh, and no-signal trees (best DX: host IDE loads the result)', () => {
+    expect(chooseInstallTarget('host-native', false)).toBe('native');
+    expect(chooseInstallTarget('no-deps', false)).toBe('native');
+    expect(chooseInstallTarget('deps-without-native-signal', false)).toBe('native');
   });
 
-  it('says containment off when not contained, and uses no em dash', () => {
-    const line = orientLine({ pm: 'pnpm', mode: 'host-native', contained: false });
-    expect(line).toBe('pnpm · host-native deps · containment off');
+  it('forceContainer (explicit `sandbox <pm>`) always wins, regardless of mode', () => {
+    expect(chooseInstallTarget('host-native', true)).toBe('container');
+    expect(chooseInstallTarget('no-deps', true)).toBe('container');
+    expect(chooseInstallTarget('deps-without-native-signal', true)).toBe('container');
+    expect(chooseInstallTarget('container-built', true)).toBe('container');
+  });
+});
+
+describe('writeActionLine', () => {
+  it('native: leads with the action verb, names the pm and mode, and states the honest no-boundary line', () => {
+    const line = writeActionLine({ verb: 'installing', pm: 'pnpm', mode: 'host-native', target: 'native' });
+    expect(line).toBe('installing natively on the host with pnpm (host-native deps; gates ran, no container boundary)');
     expect(line).not.toContain('—');
+  });
+
+  it('container: leads with the action verb, names the pm and mode, and states what the boundary buys', () => {
+    const line = writeActionLine({ verb: 'installing', pm: 'npm', mode: 'container-built', target: 'container' });
+    expect(line).toBe('installing in a throwaway container with npm (container-built deps; no host creds, default-deny egress)');
+    expect(line).not.toContain('—');
+  });
+
+  it('uses the operation verb, so a remove announces a removal not an install', () => {
+    expect(writeActionLine({ verb: 'removing', pm: 'pnpm', mode: 'host-native', target: 'native' })).toMatch(/^removing natively on the host with pnpm/);
+  });
+
+  it('reflects the package manager and mode in each segment', () => {
+    expect(writeActionLine({ verb: 'adding', pm: 'yarn', mode: 'no-deps', target: 'native' })).toContain('yarn');
+    expect(writeActionLine({ verb: 'adding', pm: 'bun', mode: 'no-deps', target: 'native' })).toContain('no deps yet');
   });
 });

@@ -19,7 +19,7 @@ flowchart TB
     style BOX fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
 ```
 
-Add a dependency with `sandbox add zod`, install with `sandbox install`, refresh with `sandbox update`. It auto-detects npm/pnpm/yarn/bun and mirrors it, vets the target versions, then runs the install natively on the host. Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. Want the boundary too? Use explicit `sandbox pnpm add zod` or `sandbox devcontainer init`. To review a package without installing, run `sandbox check express` (no Docker). (Already think in your package manager? The expert aliases like `spnpm add zod` are the same gated native path, fewer keystrokes. See [Expert: per-PM shortcuts](#expert-per-pm-shortcuts).)
+Add a dependency with `sandbox add zod`, install with `sandbox install`, refresh with `sandbox update`. It auto-detects npm/pnpm/yarn/bun and mirrors it, vets the target versions, then installs mode-aware (native on a host-native or fresh project, contained when the tree already is). Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. Want the boundary too? Use explicit `sandbox pnpm add zod` or `sandbox devcontainer init`. To review a package without installing, run `sandbox check express` (no Docker). (Already think in your package manager? The expert aliases like `spnpm add zod` are the same mode-aware path, fewer keystrokes. See [Expert: per-PM shortcuts](#expert-per-pm-shortcuts).)
 
 ## Quickstart
 
@@ -27,8 +27,8 @@ Add a dependency with `sandbox add zod`, install with `sandbox install`, refresh
 
 ```bash
 sandbox setup --vibe         # one-button setup: config, backend check, build images
-sandbox add zod              # vet, then install natively on the host
-sandbox install              # full install, gated + native by default
+sandbox add zod              # vet, then install mode-aware (native or contained)
+sandbox install              # full install, gated and mode-aware
 sandbox update               # refresh deps through the same gates
 sandbox x vite               # run a one-off tool in the box
 sandbox pnpm add zod         # explicit container boundary for this install
@@ -36,9 +36,9 @@ sandbox check express        # vet a package WITHOUT installing (no Docker neede
 sandbox devcontainer init    # containment + a happy IDE: editor and deps both in the container
 ```
 
-`sandbox add` / `sandbox install` / `sandbox update` are the everyday write path: the verbs you already use, vetted, then run natively on the host. Sandbox auto-detects your package manager (npm/pnpm/yarn/bun) and mirrors it, so you don't name it. Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. When trust drops, the one-keystroke boundary is explicit `sandbox <pm>` or `sandbox devcontainer init`.
+`sandbox add` / `sandbox install` / `sandbox update` are the everyday write path: the verbs you already use, vetted, then run mode-aware (native on a host-native or fresh project, contained when the tree already is). Sandbox auto-detects your package manager (npm/pnpm/yarn/bun) and mirrors it, so you don't name it. Your real `pnpm` is never shadowed; you opt in by typing `sandbox`. When trust drops, the one-keystroke boundary is explicit `sandbox <pm>` or `sandbox devcontainer init`.
 
-Before every write, sandbox prints a one-line orient in the form `pnpm · host-native deps · native` or `pnpm · container-built deps · contained` (package manager, project mode, execution mode), so you always know which tree you're touching.
+Before every write, sandbox prints one line saying what's about to happen and why: `installing natively on the host with pnpm (host-native deps; gates ran, no container boundary)` or `installing in a throwaway container with pnpm (container-built deps; no host creds, default-deny egress)`. A native install runs lifecycle scripts on the host, so the gates are heuristics, not a boundary; the container is the boundary.
 
 ## Works with
 
@@ -86,7 +86,7 @@ Explicit `sandbox <pm>` and `sandbox devcontainer init` are the containment surf
 | Command | What it does |
 | --- | --- |
 | `sandbox setup [--preset N]` | One-button onboarding: write config, check the backend, build images, print next steps. |
-| `sandbox install` · `sandbox add zod` · `sandbox update` | Gated native install / add / refresh (auto-detects the PM). |
+| `sandbox install` · `sandbox add zod` · `sandbox update` | Gated, mode-aware install / add / refresh (auto-detects the PM). |
 | `sandbox dev` · `sandbox test` · `sandbox x <tool>` | Run a dev server, a script, or a one-off tool in the box. |
 | `sandbox doctor [--fix]` | Check config, package manager, backend, daemon, and image state. |
 | `sandbox check [pkg \| file.json]` | Audit deps **before** you install them: OSV advisories, typosquats, fresh/deprecated versions. No container, no Docker. Bare `check` audits the whole project (root + every workspace); pass a `package.json` to audit a specific manifest. |
@@ -99,7 +99,7 @@ Run `sandbox help` for the full surface, or see the [full reference](docs/refere
 
 ## Expert: per-PM shortcuts
 
-If you already think in your package manager, the per-PM binaries are the same gated native path with shorter keystrokes. Nothing new to learn, just muscle memory:
+If you already think in your package manager, the per-PM binaries are the same mode-aware path with shorter keystrokes. Nothing new to learn, just muscle memory:
 
 ```bash
 sandbox-pnpm add zod   # explicit per-PM binary
@@ -109,7 +109,7 @@ snpx vite              # npx, one-off tool
 sbun add hono          # bun
 ```
 
-Each mirrors the matching package manager while keeping the `sandbox` gate engine in front. They never shadow your real `npm`/`pnpm`/`yarn`/`bun`; you opt in by typing the prefix. Use them or stick with `sandbox add`, both land in the same native-default path. Use explicit `sandbox <pm>` when you want the throwaway container boundary.
+Each mirrors the matching package manager while keeping the `sandbox` gate engine in front. They never shadow your real `npm`/`pnpm`/`yarn`/`bun`; you opt in by typing the prefix. Use them or stick with `sandbox add`, both land in the same mode-aware path. Use explicit `sandbox <pm>` when you want the throwaway container boundary.
 
 ## On macOS or Windows: host IDEs and `node_modules`
 

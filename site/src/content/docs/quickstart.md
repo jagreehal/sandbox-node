@@ -43,7 +43,7 @@ sandbox: gates passed, installing natively on the host so your IDE gets native b
 A clean install stays quiet otherwise. Findings are loud and specific.
 
 :::tip[Expert shortcuts]
-Prefer your package manager's own keystrokes? The per-PM binaries are shorter front-ends for the same gated native path: `sandbox-pnpm add zod`, or the terse `spnpm add zod` (and `snpm`, `snpx`, `sbun`). Use explicit `sandbox pnpm add zod` when you want the throwaway container boundary.
+Prefer your package manager's own keystrokes? The per-PM binaries are shorter front-ends for the same gated, mode-aware path: `sandbox-pnpm add zod`, or the terse `spnpm add zod` (and `snpm`, `snpx`, `sbun`). Use explicit `sandbox pnpm add zod` when you want the throwaway container boundary.
 :::
 
 ## One mode per project

@@ -40,6 +40,34 @@ export function parsePendingBuilds(text: string): string[] {
   return pending;
 }
 
+/**
+ * What to do about pending pnpm build scripts after an install, given the resolved inputs. Pure so the
+ * decision is unit-tested once and shared by both write paths (native and contained); the caller owns
+ * the file read (findPendingBuilds) and the effects (write/prompt/log).
+ *   - `none`: nothing pending, or this isn't a pnpm install-class command.
+ *   - `approve-all`: `--allow-all-builds` was passed, approve every pending build and re-run.
+ *   - `prompt`: a TTY is available, ask which to build, then re-run.
+ *   - `guide`: no TTY and no flag, print the one-line `approve-builds` guidance and surface non-zero.
+ */
+/**
+ * Whether an argv actually runs pnpm, so build-approval keys off the package manager in the COMMAND,
+ * not the repo's detected pm. Without this, `sandbox npm install` in a pnpm repo would trip pnpm's
+ * build-approval state and fail with pnpm-specific guidance. pnpm argv is `pnpm …` or `corepack pnpm …`
+ * (install/add/update/remove all share that leader).
+ */
+export function argvRunsPnpm(argv: string[]): boolean {
+  return argv[0] === 'pnpm' || (argv[0] === 'corepack' && argv[1] === 'pnpm');
+}
+
+export type BuildApprovalDecision = 'none' | 'approve-all' | 'prompt' | 'guide';
+
+export function planBuildApproval(input: { pendingCount: number; isPnpmInstall: boolean; allowAll: boolean; canPrompt: boolean }): BuildApprovalDecision {
+  if (!input.isPnpmInstall || input.pendingCount === 0) return 'none';
+  if (input.allowAll) return 'approve-all';
+  if (input.canPrompt) return 'prompt';
+  return 'guide';
+}
+
 export function findPendingBuilds(rootDir: string): string[] {
   const file = path.join(rootDir, WORKSPACE_FILE);
   if (!existsSync(file)) return [];
@@ -165,12 +193,15 @@ export function writeBuildApprovals(rootDir: string, decisions: Map<string, bool
 }
 
 /**
- * Interactive approval — all packages selected by default (the common case is "yes, build them,
- * they're contained anyway"). Returns the decision map, or null if the user cancelled.
+ * Interactive approval — all packages selected by default (the common case is "yes, build them").
+ * `contained` adjusts the honesty of the prompt: a contained install runs these scripts in the
+ * sandbox (safe to default-allow), a native install runs them on the host (no boundary, so the line
+ * says so instead of reassuring). Returns the decision map, or null if the user cancelled.
  */
-export async function promptBuildApprovals(pending: string[]): Promise<Map<string, boolean> | null> {
+export async function promptBuildApprovals(pending: string[], contained: boolean): Promise<Map<string, boolean> | null> {
+  const where = contained ? 'contained in the sandbox' : 'on your host, with no container boundary';
   const selected = await multiselect<string>({
-    message: `${pending.length} package(s) want to run install scripts (contained in the sandbox). Allow which to build?`,
+    message: `${pending.length} package(s) want to run install scripts (${where}). Allow which to build?`,
     options: pending.map((name) => ({ value: name, label: name })),
     initialValues: pending,
     required: false,

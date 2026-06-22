@@ -109,7 +109,7 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
   console.log('');
   console.log('Next:');
   console.log('  sandbox check zod          review a package before you add it (no container, installs nothing)');
-  console.log('  sandbox install            vet, then install dependencies natively using the detected package manager');
+  console.log('  sandbox install            vet, then install (native, or contained if the tree already is) with the detected package manager');
   console.log(`  sandbox ${preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? 'dev' : 'test'}                ${preset === 'vibe' || preset === 'agent' || preset === 'trusted' ? 'run your app in the container' : 'run your project tests in the container'}`);
 
   printBinsTip(pm);
@@ -118,12 +118,13 @@ export async function runSetup(cwd: string, opts: SetupOptions): Promise<number>
 
 /**
  * Point at the per-PM binaries: same keystrokes as your package manager, gated first, then a
- * native host install. The explicit `sandbox <pm>` form remains the one-keystroke container path.
- * Your real `npm`/`pnpm` is never shadowed. No shell editing, no takeover.
+ * mode-aware install (native on a host-native or fresh project, contained when the tree already is).
+ * The explicit `sandbox <pm>` form remains the one-keystroke force-container path. Your real
+ * `npm`/`pnpm` is never shadowed. No shell editing, no takeover.
  */
 function printBinsTip(pm: ReturnType<typeof resolvePackageManager>): void {
   console.log('');
   console.log('Advanced:');
-  console.log(`  s${pm} add zod              same gated native path, shorter keystrokes (your real ${pm} stays untouched)`);
+  console.log(`  s${pm} add zod              same mode-aware path, shorter keystrokes (your real ${pm} stays untouched)`);
   console.log('  sandbox devcontainer init  keep your editor + agent inside the container for the full session');
 }

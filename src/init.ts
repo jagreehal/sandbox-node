@@ -104,7 +104,7 @@ export function initNextCommands(preset: PresetName): string[] {
 /** Post-init tips, one string per tip. The first two apply to every preset; agent adds one. */
 export function initTips(preset: PresetName, pm: PackageManager): string[] {
   const tips = [
-    `advanced: s${pm} add zod uses the same gated native path with shorter keystrokes; your real ${pm} stays untouched`,
+    `advanced: s${pm} add zod uses the same mode-aware path (native, or contained if the tree already is) with shorter keystrokes; your real ${pm} stays untouched`,
   ];
   if (preset === 'agent') tips.push('full agent isolation (editor + agent in the jail), sandbox devcontainer init');
   return tips;

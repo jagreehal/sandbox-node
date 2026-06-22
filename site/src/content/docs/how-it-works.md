@@ -9,7 +9,7 @@ A dependency's `postinstall`, `preinstall`, or `node-gyp` step runs arbitrary co
 
 ## The everyday defense: vet, then install natively
 
-The default path catches a bad dependency *before* it lands, then installs natively on the host so your IDE and tools get host-native binaries. `sandbox add zod` runs the [supply-chain gates](#supply-chain-gates-before-the-bytes-arrive) against the exact versions it would fetch, then, if they pass, runs the real package manager natively. The gate engine is the everyday product. The container is the real boundary when trust drops. `sandbox add` auto-detects your package manager, and the explicit `sandbox <pm>` form is the contained twin for the same operation.
+The default path catches a bad dependency *before* it lands, then installs mode-aware. A fresh or host-native project installs natively on the host so your IDE and tools get host-native binaries. A container-built tree stays contained. `sandbox add zod` runs the [supply-chain gates](#supply-chain-gates-before-the-bytes-arrive) against the exact versions it would fetch, then, if they pass, runs the real package manager in the right mode for that project. The gate engine is the everyday product. The container is the real boundary when trust drops. `sandbox add` auto-detects your package manager, and the explicit `sandbox <pm>` form is the contained twin for the same operation.
 
 ## The boundary, when you opt in
 
@@ -58,7 +58,7 @@ Removing a dependency fetches nothing new, so it skips the gates.
 
 ## It mirrors your package manager
 
-You don't learn a new vocabulary. sandbox auto-detects npm, pnpm, yarn, or bun from your lockfile and `packageManager` field, and runs the command you typed. `sandbox add zod` stays pnpm in a pnpm project; `sandbox install --frozen` stays a frozen install. Prefer your package manager's own keystrokes? The per-PM shortcuts (`sandbox-pnpm add zod`, `spnpm add zod`, `snpm ci`) take the same gated native path with fewer keystrokes. Your real `pnpm` is never shadowed, you opt in by typing `sandbox` or the prefix.
+You don't learn a new vocabulary. sandbox auto-detects npm, pnpm, yarn, or bun from your lockfile and `packageManager` field, and runs the command you typed. `sandbox add zod` stays pnpm in a pnpm project; `sandbox install --frozen` stays a frozen install. Prefer your package manager's own keystrokes? The per-PM shortcuts (`sandbox-pnpm add zod`, `spnpm add zod`, `snpm ci`) take the same gated, mode-aware path with fewer keystrokes. Your real `pnpm` is never shadowed, you opt in by typing `sandbox` or the prefix.
 
 :::note[One mode per project]
 `node_modules` is either LOCAL (host-native, from your own package manager or the native-default sandbox path, so the IDE just works) or CONTAINER (the Linux tree an explicit contained install builds). Never both. sandbox tells them apart by the native binaries in the tree (read live, so it can't go stale), and before a contained install would replace a host-native tree with a Linux one the IDE can't load it warns, and on a terminal asks you to confirm the switch. Want containment and a happy IDE together? A [devcontainer](/agent-isolation/) keeps `node_modules` in a Docker volume with the editor and deps in the box.

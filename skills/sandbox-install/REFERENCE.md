@@ -154,11 +154,15 @@ than wedging the install.
 ## Write commands (the default path)
 
 The write path leads with three commands; sandbox auto-detects the package manager from the project,
-so you don't name it. Each vets the targets with the gate engine, then runs the install in a throwaway
-container. Before each contained write the CLI prints a one-line orient: `pnpm · container-built deps
-· contained` (package manager · project mode · containment).
+so you don't name it. Each vets the targets with the gate engine, then installs mode-aware: native on a
+host-native or fresh project, contained when the tree is already a container build. Before each write
+the CLI prints one line saying what's about to happen and why:
+`installing natively on the host with pnpm (host-native deps; gates ran, no container boundary)` or
+`installing in a throwaway container with pnpm (container-built deps; no host creds, default-deny egress)`.
+A native install runs lifecycle scripts on the host, so the gates are heuristics, not a boundary; the
+container is the boundary.
 
-- `sandbox install [pkgs]`: install (or add the named packages) through the gated native path.
+- `sandbox install [pkgs]`: install (or add the named packages) through the mode-aware write path.
 - `sandbox add <pkg...>`: add dependencies, saved as exact versions by default; this is where safe
   install (above) applies.
 - `sandbox update`: update existing deps within their declared ranges. To move the ranges themselves,
@@ -166,22 +170,24 @@ container. Before each contained write the CLI prints a one-line orient: `pnpm �
 - `sandbox remove <pkg...>`: uninstall. Fetches nothing new, so there's no gate surface, but it still
   runs through sandbox.
 
-## Expert: per-PM binaries (same gated native path, shorter keystrokes)
+## Expert: per-PM binaries (same mode-aware path, shorter keystrokes)
 
 For a human who lives in their package manager's muscle memory, the per-PM binaries take the same
-contained path without the `sandbox` prefix or the auto-detect step, instead of shadowing their
+mode-aware path without the `sandbox` prefix or the auto-detect step, instead of shadowing their
 shell's `npm`/`pnpm` (which is bad DX). `sandbox-pnpm add zod` (short alias `spnpm add zod`) is the
-same keystrokes as `pnpm add zod`: it vets with the gate engine, then installs in a throwaway
-container, so lifecycle scripts can't reach the host. They are thin front-ends for `sandbox <pm>`:
-`spnpm add zod` == `sandbox pnpm add zod`. Binaries: `sandbox-npm`/`snpm`, `sandbox-pnpm`/`spnpm`,
-`sandbox-yarn`/`syarn`, `sandbox-bun`/`sbun`, `sandbox-npx`/`snpx`, `sandbox-bunx`/`sbunx`. The
-explicit `sandbox <pm> …` form names the package manager when you don't want to rely on detection.
+same keystrokes as `pnpm add zod`: it vets with the gate engine, then installs mode-aware (native on a
+host-native or fresh project, contained when the tree already is). Binaries: `sandbox-npm`/`snpm`,
+`sandbox-pnpm`/`spnpm`, `sandbox-yarn`/`syarn`, `sandbox-bun`/`sbun`, `sandbox-npx`/`snpx`,
+`sandbox-bunx`/`sbunx`. The explicit `sandbox <pm> …` form always containerizes and names the package
+manager when you don't want to rely on detection.
 
-- Always containerized: the install runs inside the boundary (no host creds, default-deny egress,
-  `--cap-drop ALL`), exactly like `sandbox <pm>`.
+- Mode-aware, not always containerized: a fresh or host-native project installs natively; a tree that
+  is already a container build keeps getting contained installs (no host creds, default-deny egress,
+  `--cap-drop ALL`). For the always-container boundary, use explicit `sandbox <pm>`.
 - The real `npm`/`pnpm` is never shadowed; the user opts in by typing the prefix.
-- One mode per project: a `sandbox-<pm>` install builds a container `node_modules` (Linux tree); the
-  user's own `pnpm install` keeps it local. Never both. sandbox tells them apart by the native
+- One mode per project: a contained install (explicit `sandbox <pm>`, or a per-PM binary on an
+  already-container tree) builds a container `node_modules` (Linux tree); a native install or the
+  user's own `pnpm install` keeps it host-native. Never both. sandbox tells them apart by the native
   binaries in the tree, read live (so the signal can't go stale after a host install). Before
   clobbering a host-native tree, sandbox warns (TTY: confirm the switch; CI / non-TTY: logs and
   proceeds). For host tooling against a container tree, run it through `sandbox`, or use `sandbox

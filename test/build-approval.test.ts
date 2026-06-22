@@ -1,5 +1,47 @@
 import { describe, expect, it } from 'vitest';
-import { applyBuildApprovals, parsePendingBuilds, renderApproveBuildsCommand } from '../src/build-approval.js';
+import { applyBuildApprovals, argvRunsPnpm, parsePendingBuilds, planBuildApproval, renderApproveBuildsCommand } from '../src/build-approval.js';
+
+describe('argvRunsPnpm', () => {
+  it('is true only when the command itself runs pnpm (bare or via corepack)', () => {
+    expect(argvRunsPnpm(['pnpm', 'install'])).toBe(true);
+    expect(argvRunsPnpm(['corepack', 'pnpm', 'install', '--frozen-lockfile'])).toBe(true);
+    expect(argvRunsPnpm(['corepack', 'pnpm', 'remove', 'zod'])).toBe(true);
+  });
+
+  it('is false for other package managers, so build-approval stays pnpm-only', () => {
+    // The cross-PM bug: `sandbox npm install` in a pnpm repo must NOT trip pnpm build-approval.
+    expect(argvRunsPnpm(['npm', 'install'])).toBe(false);
+    expect(argvRunsPnpm(['corepack', 'yarn', 'install'])).toBe(false);
+    expect(argvRunsPnpm(['bun', 'install'])).toBe(false);
+  });
+});
+
+describe('planBuildApproval', () => {
+  const base = { pendingCount: 1, isPnpmInstall: true, allowAll: false, canPrompt: false };
+
+  it('is none when there is nothing pending or it is not a pnpm install', () => {
+    expect(planBuildApproval({ ...base, pendingCount: 0 })).toBe('none');
+    expect(planBuildApproval({ ...base, isPnpmInstall: false })).toBe('none');
+  });
+
+  it('approve-all wins when --allow-all-builds is set (even with a TTY)', () => {
+    expect(planBuildApproval({ ...base, allowAll: true })).toBe('approve-all');
+    expect(planBuildApproval({ ...base, allowAll: true, canPrompt: true })).toBe('approve-all');
+  });
+
+  it('prompts when a TTY is available and no flag was passed', () => {
+    expect(planBuildApproval({ ...base, canPrompt: true })).toBe('prompt');
+  });
+
+  it('falls back to guidance with no TTY and no flag (CI / non-interactive)', () => {
+    expect(planBuildApproval({ ...base })).toBe('guide');
+  });
+
+  it('decides the same way regardless of native vs contained (the path does not change the decision)', () => {
+    // The decision is mode-independent; only the copy differs. So native installs get the same UX.
+    expect(planBuildApproval({ pendingCount: 2, isPnpmInstall: true, allowAll: false, canPrompt: true })).toBe('prompt');
+  });
+});
 
 describe('parsePendingBuilds', () => {
   it('flags allowBuilds entries with pnpm’s placeholder value', () => {
