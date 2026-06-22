@@ -1,6 +1,6 @@
 {
   "name": "@jagreehal/sandbox-node",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Vet npm/pnpm/yarn/bun dependencies before fetch, install mode-aware by default, and use a throwaway container boundary on demand.",
   "author": "Jag Reehal",
   "license": "Apache-2.0",
