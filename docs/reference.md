@@ -26,15 +26,18 @@ flowchart TB
     style BOX fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
 ```
 
-Start with the one-word write commands: `sandbox install`, `sandbox add <pkg>`, `sandbox upgrade`. Each
-vets the target versions, then runs the install natively on the host. `sandbox` auto-detects your
-package manager, so you don't name it. Before every write it prints a one-line orient such as
-`pnpm · host-native deps · native` or `pnpm · container-built deps · contained`, so you always know
-what is about to happen. The container is the real boundary, but it is the explicit path, not the
-default one.
+Start with the one-word write commands: `sandbox install`, `sandbox add <pkg>`, `sandbox update`. Each
+vets the target versions, then installs mode-aware: native on a host-native or fresh project,
+contained when the tree is already a container build. (`sandbox upgrade` is preview-only by default; it
+moves declared ranges and installs the same way only with `--write`.) `sandbox` auto-detects your package manager, so
+you don't name it. Before every write it prints one line saying what's about to happen and why, such as
+`installing natively on the host with pnpm (host-native deps; gates ran, no container boundary)` or
+`installing in a throwaway container with pnpm (container-built deps; no host creds, default-deny egress)`.
+A native install runs lifecycle scripts on the host, so the gates are heuristics, not a boundary; the
+container is the real boundary, reached on the explicit path.
 
 Prefer the exact keystrokes of your package manager? The per-PM binaries (`sandbox-pnpm add zod`, short
-alias `spnpm add zod`) run the same gated native path with shorter typing. See
+alias `spnpm add zod`) run the same mode-aware path with shorter typing. See
 [Expert: per-PM binaries](#expert-per-pm-binaries-sandbox-pnpm--spnpm).
 
 Want a host-native `node_modules` for your IDE? Run your own package manager (`pnpm install`); want
@@ -51,8 +54,8 @@ For the reasoning before the command reference, read these three short posts fir
 
 ```bash
 sandbox setup --vibe         # one-button setup
-sandbox add zod              # vet, then install natively on the host
-sandbox install              # full install, gated and native by default
+sandbox add zod              # vet, then install mode-aware (native or contained)
+sandbox install              # full install, gated and mode-aware
 sandbox pnpm add zod         # explicit throwaway-container boundary for this install
 sandbox x vite               # one-off tools too (npx/bunx-style)
 sandbox check express        # vet packages WITHOUT installing (no Docker needed)
@@ -197,8 +200,9 @@ harvests your `~/.npmrc` and `~/.aws/credentials`. See [Quick Start](#quick-star
 ## In the container: protected when you opt in
 
 These are the boundary's guarantees, in force on explicit `sandbox <pm>` runs and in a devcontainer. The
-gate engine still vets first; this is what the container adds on top. The native-default path
-(`sandbox install` / `add`, the per-PM binaries) vets first, then runs on the host. The one read-only
+gate engine still vets first; this is what the container adds on top. The everyday write path
+(`sandbox install` / `add`, the per-PM binaries) vets first, then installs mode-aware: native on a
+host-native or fresh project, contained when the tree is already a container build. The one read-only
 review pass that skips both install and container is `sandbox check` / `sandbox preflight`.
 
 - **Credentials**: no `~/.ssh`, `~/.npmrc`, `~/.aws`, or home dir reach the container.
@@ -410,8 +414,9 @@ Use `@latest` so `npx` does not reuse a stale cached version. For day-to-day use
 ```text
 sandbox [globals] <command> [args]
 
-Write deps (auto-detects your package manager, vetted, then contained):
-  sandbox install                                     install deps (contained)
+Write deps (auto-detects your package manager, vetted, then mode-aware: native on a host-native or
+fresh project, contained when the tree is already a container build):
+  sandbox install                                     install deps (mode-aware)
   sandbox --frozen install                            reproducible install (read-only tree)
   sandbox add <pkg...>                                add dependency(ies), saved exact
   sandbox remove <pkg...>                             drop dependency(ies)
@@ -420,9 +425,9 @@ Write deps (auto-detects your package manager, vetted, then contained):
   sandbox script <name>                               run a colliding script name explicitly
   sandbox x <tool>                                    run a package binary (npx/bunx-style)
 
-Pass-through (expert): type your package manager and it routes onto the same contained models. The
-sandbox-<pm>/s<pm> binaries (spnpm add zod) are thin front-ends for the `sandbox <pm>` form; both run in
-the container. See "Expert: per-PM binaries":
+Pass-through (expert): type your package manager with `sandbox <pm>` and it always containerizes. The
+sandbox-<pm>/s<pm> binaries (spnpm add zod) take the mode-aware write path above, not the always-container
+form. See "Expert: per-PM binaries":
   sandbox install | sandbox npm install | sandbox pnpm install   install deps (contained)
   sandbox --frozen install | sandbox npm ci                      reproducible install (read-only tree)
   sandbox add <pkg> | sandbox pnpm add <pkg>                    add a dependency
@@ -537,11 +542,11 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox setup` | One-button onboarding. Writes `sandbox.config.json` if needed, checks Docker, builds images if needed, then prints the next commands. |
 | `sandbox allow <host...>` | Add host(s) to `egress.allow` for this repo. Use it when a trusted install needs something like `nodejs.org` or a private registry host. |
 | `sandbox approve-builds [pkg]` | Record pnpm dependency build-script decisions from `pnpm-workspace.yaml`. With no package names it records every pending build; `--deny` writes `false`. Approved packages are also added to `onlyBuiltDependencies`, and plain `approve-builds` re-runs the install so those scripts build. |
-| `sandbox-<pm>` / `s<pm>` (e.g. `sandbox-pnpm`, `spnpm`) | Expert per-PM binaries: same gated native path as `sandbox install` / `add`, with the exact keystrokes of your package manager. Use explicit `sandbox <pm>` for the throwaway-container boundary. See [Expert: per-PM binaries](#expert-per-pm-binaries-sandbox-pnpm--spnpm). |
+| `sandbox-<pm>` / `s<pm>` (e.g. `sandbox-pnpm`, `spnpm`) | Expert per-PM binaries: same mode-aware path as `sandbox install` / `add`, with the exact keystrokes of your package manager. Use explicit `sandbox <pm>` for the throwaway-container boundary. See [Expert: per-PM binaries](#expert-per-pm-binaries-sandbox-pnpm--spnpm). |
 | `sandbox doctor` | Preflight: validates config, detects the package manager, checks the backend binary + daemon, flags a container-escape CVE in the runtime and an end-of-life Node line in the sandbox image, reports workspace root and package workdir in monorepos, surfaces private registry hints from `.npmrc`, and prints fix commands for common failures. Exits non-zero on a hard failure. |
-| `sandbox install [args]` | The default install command. `sandbox` auto-detects your package manager. Persistence paths and `package.json` stay read-only. The project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates. Host credentials stay out. `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. Expert equivalents like `sandbox npm install` and `spnpm install` route onto this same model. |
-| `sandbox add <pkg...>` | The default add command. Keeps the same isolation as `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. Expert equivalents like `sandbox npm install <pkg>` and `spnpm add <pkg>` route onto this same model. |
-| `sandbox remove <pkg...>` | The default remove command. Same write-class isolation as `add` (`package.json` writable, persistence paths and host creds locked out), so the removed package's `preuninstall`/`postuninstall` scripts run in the box, not against your real home dir. It fetches nothing new, so the supply-chain gates have no surface to check. Expert equivalents like `sandbox npm uninstall <pkg>` and `spnpm remove <pkg>` route onto this same model. |
+| `sandbox install [args]` | The default install command. `sandbox` auto-detects your package manager and installs mode-aware: native on a host-native or fresh project, contained when the tree is already a container build. On the contained path, persistence paths and `package.json` stay read-only, the project root stays writable so `pnpm`/`npm`/`yarn` can write temp files and lockfile updates, host credentials stay out, and `install.network` defaults to `allowlist`, so install reaches only the registry hosts in `egress.allow` unless you opt into more. A native install runs lifecycle scripts on the host, so the gates are heuristics, not a boundary. Expert equivalents like `spnpm install` route onto this same mode-aware model; `sandbox npm install` always containerizes. |
+| `sandbox add <pkg...>` | The default add command. Mode-aware like `install`, lets the package manager write `package.json`, and saves added dependencies as exact versions by default. Expert equivalents like `spnpm add <pkg>` route onto this same mode-aware model; `sandbox npm install <pkg>` always containerizes. |
+| `sandbox remove <pkg...>` | The default remove command. Mode-aware like `add`; on the contained path `package.json` is writable while persistence paths and host creds stay locked out, so the removed package's `preuninstall`/`postuninstall` scripts run in the box, not against your real home dir. It fetches nothing new, so the supply-chain gates have no surface to check. Expert equivalents like `spnpm remove <pkg>` route onto this same mode-aware model; `sandbox npm uninstall <pkg>` always containerizes. |
 | `sandbox dev` | Convenience script command for the common dev-server case. Resolves `dev`, then `start`, then `serve`, and enables dev-mode networking + common dev ports for that invocation. |
 | `sandbox script <name>` | Run a specific `package.json` script with native PM syntax, even when the name collides with a sandbox command such as `build`. |
 | `sandbox run -- <cmd>` | The low-level run model. Most users reach for `sandbox test`, `sandbox dev`, or `sandbox x <tool>` instead. `run.network` defaults to `none`. |
@@ -552,7 +557,7 @@ you also install sibling tools like `sandbox-python` globally).
 | `sandbox secrets [path]` | Offline scan for committed credentials (~40 provider patterns — API keys, tokens, private keys, database URLs with passwords). Checksum/decode validation (Luhn, JWT header decode) drops false positives, and an entropy fallback catches secret-ish values with no known shape. Read-only, no container; exits non-zero on any finding, so it doubles as a CI tripwire. Matched values are redacted — it reports *where*, never the secret. Defaults to the project root. See [Catch committed secrets](#catch-committed-secrets-sandbox-secrets). |
 | `sandbox demo` | Run real supply-chain attacks (credential theft, persistence hook, IMDS pivot, egress exfil) against the live sandbox in a **throwaway** project and show each one contained. No mocks — every attack goes through the same execute path a real install uses. Exits non-zero if any attack isn't contained. See [Watch it work](#watch-it-work-sandbox-demo). |
 | `sandbox feeds <update\|list>` | Manage malware **feeds** (`install.malwareFeeds`). `update` fetches the configured feed URLs and caches them locally so the install-time blocklist check stays offline; `list` shows what's configured and cached. A package on a feed — or in a committed `sandbox.advisories.json` — **always blocks** installs, independent of the OSV network lookup. See [Your own blocklist](#your-own-blocklist-team-advisories--malware-feeds). |
-| `sandbox upgrade [--write]` | Move declared dependency **ranges** to newer versions (wraps `npm-check-updates`), what `sandbox npm update` won't do (it stays within the range). Your `minReleaseAgeDays` drives ncu's `--cooldown` automatically, so you only see versions that have aged in; the proposed versions then pass through the **same** malware/deprecation/age gates as install. Without `--write` it previews a gated table; with `--write` it rewrites `package.json` and installs in the sandbox. Scope the jump with `--minor`/`--patch`/`--target`, skip packages with `--reject <pat>`. |
+| `sandbox upgrade [--write]` | Move declared dependency **ranges** to newer versions (wraps `npm-check-updates`), what `sandbox npm update` won't do (it stays within the range). Your `minReleaseAgeDays` drives ncu's `--cooldown` automatically, so you only see versions that have aged in; the proposed versions then pass through the **same** malware/deprecation/age gates as install. Without `--write` it previews a gated table; with `--write` it rewrites `package.json` and installs through the same mode-aware path as `sandbox install` (native on a host-native or fresh project, contained when the tree already is). Scope the jump with `--minor`/`--patch`/`--target`, skip packages with `--reject <pat>`. |
 | `sandbox verify [--scan] [--secrets] [--sign]` | Exit non-zero unless this repo commits a real sandbox boundary and no personal layer has loosened it. With `--scan`, also runs the retroactive malware sweep; with `--secrets`, also fails if a credential is committed; with `--sign`, emits an Ed25519-signed receipt of the green boundary to stdout (needs `SANDBOX_SIGNING_KEY`). The CI gate behind the verified badge. See [Signed receipts](#signed-receipts--tamper-evident-audit-log). |
 | `sandbox verify-receipt <file>` | Verify a signed receipt from `verify --sign`. `--fingerprint <hex>` (or `SANDBOX_TRUSTED_KEY`) pins the signer so a valid signature from any other key is rejected. |
 | `sandbox keygen` | Generate an Ed25519 signing keypair: store the private key as a CI secret (`SANDBOX_SIGNING_KEY`), pin the printed fingerprint via `SANDBOX_TRUSTED_KEY`. |
@@ -902,15 +907,15 @@ sandbox --json install | jq '{network, argv, mounts}'
 
 ## Recommended Workflow
 
-Everyday: the one-word write commands vet, then run the install natively on the host:
+Everyday: the one-word write commands vet, then install mode-aware (native on a host-native or fresh project, contained when the tree is already a container build):
 
 ```bash
-sandbox install          # gated, then native by default
+sandbox install          # gated, then mode-aware
 sandbox add zod
 sandbox x vite
 ```
 
-That native-default path keeps `node_modules` host-native. An explicit contained install builds a Linux `node_modules` (CONTAINER mode). For a host-native `node_modules`
+On a host-native or fresh project that path installs natively, keeping `node_modules` host-native. An explicit contained install (`sandbox <pm>`) builds a Linux `node_modules` (CONTAINER mode), and a tree that is already container-built keeps getting contained installs. For a host-native `node_modules`
 your IDE can load, run your own package manager (`pnpm install`); for containment and a happy IDE
 together, run [`sandbox devcontainer init`](#isolating-the-agent-itself-two-lifecycles) so the editor
 and the deps both live in the container. `sandbox run -- ...` is the lower-level run model, but most
@@ -920,7 +925,7 @@ users should stick to `sandbox test` / `sandbox dev` / `sandbox x`.
 
 `sandbox install` / `add` already auto-detect your package manager, so you don't have to name it. But if
 you prefer the exact keystrokes of `npm`/`pnpm`/`yarn`/`bun`, the per-PM binaries give you the **same
-gated native path** with shorter typing. We don't shadow your shell's real `npm`/`pnpm` (silently changing
+mode-aware path** with shorter typing. We don't shadow your shell's real `npm`/`pnpm` (silently changing
 what they mean is bad DX); instead you opt into dedicated binaries by typing:
 
 ```
@@ -930,11 +935,12 @@ snpm         spnpm         syarn         sbun         snpx         sbunx        
 
 `sandbox-pnpm add zod` (or `spnpm add zod`) is the exact keystrokes of `pnpm add zod`, while still
 putting the gate engine first. It routes onto the same add model as `sandbox add zod`: vet first,
-then install natively on the host. Use explicit `sandbox pnpm add zod` when you want the throwaway
-container boundary instead. Your real `pnpm` is never touched; you opt in by typing the prefix.
+then install mode-aware (native on a host-native or fresh project, contained when the tree already is).
+Use explicit `sandbox pnpm add zod` when you want the throwaway container boundary instead. Your real
+`pnpm` is never touched; you opt in by typing the prefix.
 
 ```bash
-spnpm add zod              # vet, then install natively on the host
+spnpm add zod              # vet, then install mode-aware (native or contained)
 spnpm install              # same, for a full install
 snpx vite                  # run a one-off tool, still gated first
 ```
@@ -1185,7 +1191,7 @@ they clear:
 sandbox upgrade                 # preview: a gated table of what could move, package.json untouched
 sandbox upgrade --minor         # cap the jump at minor (no major bumps)
 sandbox upgrade --reject react  # skip a package entirely
-sandbox upgrade --write         # rewrite package.json, then install in the sandbox to refresh the lockfile
+sandbox upgrade --write         # rewrite package.json, then install (mode-aware) to refresh the lockfile
 ```
 
 A blocked upgrade never touches `package.json`, and you get the same pin suggestions as a blocked

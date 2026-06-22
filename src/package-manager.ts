@@ -4,6 +4,14 @@ import path from 'node:path';
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
 export type InstallMode = 'install' | 'add' | 'remove';
 
+/**
+ * True when a token is a bare package-manager name. Used to tell the explicit `sandbox <pm>` passthrough
+ * (force the container) from the friendly verbs and the `sandbox-<pm>` bins (mode-aware install).
+ */
+export function isPackageManagerName(name: string): name is PackageManager {
+  return name === 'npm' || name === 'pnpm' || name === 'yarn' || name === 'bun';
+}
+
 const LOCKFILES: Record<PackageManager, string> = {
   npm: 'package-lock.json',
   pnpm: 'pnpm-lock.yaml',

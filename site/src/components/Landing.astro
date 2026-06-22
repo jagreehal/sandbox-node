@@ -13,7 +13,7 @@ const protectedList = [
 const notProtected = [
   ['Your source tree', 'Even in the container, package managers need a writable root, so a malicious dep can still edit src/ during install. Use --frozen for a read-only tree, and review git diff.'],
   ['Anything you grant', 'ssh-agent, paths, env, network. Grant the minimum; prefer ssh-agent over key files.'],
-  ['A package not yet flagged', 'The gates catch known-bad versions. A malicious version no advisory has seen yet still installs, but it installs contained, so it runs against the box, not your host.'],
+  ['A package not yet flagged', 'The gates catch known-bad versions. A malicious version no advisory has seen yet still installs. On the native path it runs on your host. In the explicit container path it runs against the box instead.'],
 ];
 const workflows = [
   ['Vet a package before installing', 'check', 'A read-only review pass (no Docker): OSV advisories, typosquats, fresh/deprecated versions, all before a byte is fetched.', `${base}/vetting/`],
@@ -27,9 +27,9 @@ const workflows = [
   <p class="band__lede">
     <code>sandbox add zod</code> and <code>sandbox install</code> are the everyday path. They auto-detect
     npm/pnpm/yarn/bun, run every target version through the supply-chain gates (release-age cooldown, OSV
-    malware, risk hints) <em>before a byte is fetched</em>, then install in a throwaway container. Each
-    contained write opens with one orient line: <code>pnpm · container-built deps · contained</code>. Your
-    real <code>pnpm</code> is never shadowed.
+    malware, risk hints) <em>before a byte is fetched</em>, then install mode-aware: native on a fresh or
+    host-native project, contained when the tree already is container-built. Each write opens with one
+    orient line that says what it will do and why. Your real <code>pnpm</code> is never shadowed.
   </p>
   <div class="works">
     {['sandbox add zod', 'sandbox install', 'sandbox check express', 'sandbox devcontainer init'].map((c) => (
@@ -37,8 +37,9 @@ const workflows = [
     ))}
   </div>
   <p class="band__lede" style="margin-top: var(--space-2xl); margin-bottom: var(--space-lg);">
-    Expert shortcut: the per-PM binaries are the same gated native path with shorter keystrokes.
-    <code>spnpm add zod</code> is just <code>sandbox pnpm add zod</code>.
+    Expert shortcut: the per-PM binaries are the same gated, mode-aware path with shorter keystrokes.
+    <code>spnpm add zod</code> is <code>sandbox-pnpm add zod</code>. Use explicit <code>sandbox pnpm add zod</code>
+    when you want the throwaway-container boundary.
   </p>
   <div class="works">
     {['sandbox-pnpm add zod', 'spnpm install', 'snpx vite', 'sandbox-npm ci'].map((c) => (
@@ -79,7 +80,7 @@ const workflows = [
 <span class="c-dim">  !! very recently published 2 hours ago</span>
 <span class="c-dim">heads-up only. Continuing. Use explicit sandbox</span>
 <span class="c-dim">pnpm add left-pad for the throwaway container.</span></code></pre>
-    <pre class="shot"><code><span class="c-dim">$ sandbox add zod   (contained)</span>
+    <pre class="shot"><code><span class="c-dim">$ sandbox pnpm add zod</span>
 <span class="c-dim">sandbox blocked 1 request to a host not on your</span>
 <span class="c-dim">allowlist:</span>
 <span class="c-ochre">  ⚠ telemetry.example.com, not a known registry</span>

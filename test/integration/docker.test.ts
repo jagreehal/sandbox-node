@@ -24,11 +24,13 @@ describe.skipIf(!hasDocker)('docker integration', () => {
       'sandbox.config.json': JSON.stringify({ install: { network: 'on' } }),
       ...files,
     });
-    const { code, stderr } = await runCli(dir, ['install']);
+    // Explicit pm form forces the container (the everyday `install` is mode-aware and a fresh project
+    // would install natively). This test is about the contained path, so force it.
+    const { code, stderr } = await runCli(dir, [pm, 'install']);
     expect(code, stderr).toBe(0);
     expect(existsSync(path.join(dir, 'node_modules', 'is-number'))).toBe(true);
-    // Golden orient line: one terse clause before the write. First install -> no deps yet, contained.
-    expect(stderr).toContain(`${pm} · no deps yet · contained`);
+    // Golden action line: one line before the write, naming where it runs and the boundary it buys.
+    expect(stderr).toContain(`installing in a throwaway container with ${pm} (no deps yet; no host creds, default-deny egress)`);
   });
 
   // Frozen reproducible install: npm gets a fully read-only source tree; pnpm keeps a
@@ -36,19 +38,23 @@ describe.skipIf(!hasDocker)('docker integration', () => {
   it.each<{ pm: string; files: Record<string, string> }>([
     { pm: 'npm', files: {} },
     { pm: 'pnpm', files: { 'pnpm-lock.yaml': '' } },
-  ])('frozen install with $pm', async ({ files }) => {
+  ])('frozen install with $pm', async ({ pm, files }) => {
     const dir = fixture({
       'package.json': JSON.stringify({ name: 't', private: true, dependencies: { 'is-number': '^7.0.0' } }),
       'sandbox.config.json': JSON.stringify({ install: { network: 'on' } }),
       ...files,
     });
-    expect((await runCli(dir, ['install'])).code).toBe(0); // seed the lockfile
-    const { code, stderr } = await runCli(dir, ['--frozen', 'install']);
+    // Force the container (explicit pm) for both the seed and the frozen install: this is the contained
+    // reproducible-install path.
+    expect((await runCli(dir, [pm, 'install'])).code).toBe(0); // seed the lockfile
+    const { code, stderr } = await runCli(dir, ['--frozen', pm, 'install']);
     expect(code, stderr).toBe(0);
     expect(existsSync(path.join(dir, 'node_modules', 'is-number'))).toBe(true);
   });
 
-  it('--frozen without a lockfile fails fast with guidance', async () => {
+  it('--frozen without a lockfile fails fast with guidance (native path enforces it too)', async () => {
+    // Friendly `install` on a fresh project is mode-aware (native), and the native path enforces the
+    // same frozen-needs-a-lockfile invariant as the contained one.
     const dir = fixture({ 'package.json': '{"name":"t"}' });
     const { code, stderr } = await runCli(dir, ['--frozen', 'install']);
     expect(code).toBe(1);
@@ -57,7 +63,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
 
   it('contains a malicious postinstall: no creds, no repo persistence, no pollution', async () => {
     const dir = probeFixture({ install: { network: 'on' } });
-    const { code, stdout } = await runCli(dir, ['install', '--foreground-scripts']);
+    const { code, stdout } = await runCli(dir, ['npm', 'install', '--foreground-scripts']);
     expect(code).toBe(0);
     expect(stdout).toContain('PROBE creds=0');
     expect(stdout).toContain('persist=BLOCKED');
@@ -79,7 +85,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
       }),
     });
 
-    const warned = await runCli(dir, ['install', '--foreground-scripts']);
+    const warned = await runCli(dir, ['npm', 'install', '--foreground-scripts']);
     expect(warned.code).toBe(0); // install itself succeeds
     expect(warned.stderr).toMatch(/blocked \d+ network request/i); // what happened
     expect(warned.stderr).toContain('exfil.example.com');
@@ -88,7 +94,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
     expect(warned.stderr).toContain('--full-network'); // and the one-off escape hatch
     expect(warned.stderr).toContain('"exfil.example.com"'); // allowlist snippet
 
-    const failed = await runCli(dir, ['--fail-on-egress', 'install', '--foreground-scripts']);
+    const failed = await runCli(dir, ['--fail-on-egress', 'npm', 'install', '--foreground-scripts']);
     expect(failed.code).toBe(1);
   });
 
@@ -105,7 +111,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
       'bad-dep/tamper.js': 'require("node:fs").writeFileSync("/workspace/src/persist.js", "owned\\n");\n',
     });
 
-    const { code, stderr } = await runCli(dir, ['install', '--foreground-scripts']);
+    const { code, stderr } = await runCli(dir, ['npm', 'install', '--foreground-scripts']);
     expect(code).toBe(0);
     expect(stderr).toMatch(/install changed 1 project file/);
     expect(stderr).toContain('src/persist.js');
@@ -116,7 +122,7 @@ describe.skipIf(!hasDocker)('docker integration', () => {
       install: { network: 'allowlist' },
       egress: { allow: ['npmjs.org', 'npmjs.com'] },
     });
-    const { code, stdout } = await runCli(dir, ['install', '--foreground-scripts']);
+    const { code, stdout } = await runCli(dir, ['npm', 'install', '--foreground-scripts']);
     expect(code).toBe(0);
     expect(stdout).toContain('PROBE egress=BLOCKED');
     expect(stdout).toContain('persist=BLOCKED');

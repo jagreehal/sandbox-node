@@ -1,9 +1,10 @@
 /**
- * The `sandbox-<pm>` / `s<pm>` binaries are muscle-memory front-ends for `sandbox <pm>`: same
- * keystrokes as the package manager, but the install always runs in a throwaway container (the
- * boundary). `sandbox-pnpm add zod` (or `spnpm add zod`) is the exact keystrokes of `pnpm add zod`,
- * vetted by the gate engine and then run contained. Your real `pnpm` is never shadowed; you opt in
- * by typing the prefix. See docs/rfc-native-default.md for the one-mode-per-project model.
+ * The `sandbox-<pm>` / `s<pm>` binaries are muscle-memory front-ends for the friendly write path: same
+ * keystrokes as the package manager, vetted by the gate engine, then installed mode-aware (native on a
+ * host-native or fresh project, contained when the tree is already a container build). `sandbox-pnpm add
+ * zod` (or `spnpm add zod`) is the exact keystrokes of `pnpm add zod`. They are mode-aware, unlike the
+ * explicit `sandbox <pm>` form, which always containerizes (the boundary on demand). Your real `pnpm` is
+ * never shadowed; you opt in by typing the prefix. See docs/rfc-native-default.md for the one-mode-per-project model.
  *
  * In a published install each bin name is a tiny launcher in `bin/` that sets `SANDBOX_PM_BIN` and
  * imports the CLI, so the leader survives a package-manager shim that loses argv[0]. `leaderForBin`

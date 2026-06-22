@@ -14,22 +14,17 @@ import { COMPLETION_SHELLS, completionScript, isCompletionShell } from './comple
 import { resolveBuildSpec } from './image.js';
 import { runAuditVerify, runKeygen, runVerify, runVerifyReceipt, readSigningKey, signVerifyReceipt } from './verify.js';
 import { BASE_IMAGE, resolveImageDigest, writeDevcontainer } from './devcontainer.js';
-import { renderPlanSummary } from './dryrun.js';
-import { containerWritePm, effectivePm, isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
+import { effectivePm, isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from './dispatch.js';
 import { runDoctor } from './doctor.js';
-import { execute, type ExecuteResult } from './execute.js';
-import { quiet } from './exec.js';
-import { classifyCommand, containedSuccessLine } from './tamper.js';
-import { findPendingBuilds, promptBuildApprovals, renderApproveBuildsCommand, writeBuildApprovals } from './build-approval.js';
+import { execute } from './execute.js';
+import { findPendingBuilds, writeBuildApprovals } from './build-approval.js';
 import { ensureLocalConfigIgnored, runInit } from './init.js';
 import { log } from './log.js';
-import { lockfileName, pmArgv, pmAuditFixArgv, pmAuditSignaturesArgv, pmExecArgv, pmScriptArgv, pmUpdateArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
-import { planAdd, planAudit, planAuditFix, planAuditSignatures, planInstall, planRemove, planRun, planUpdate, type PlanOptions, type RunPlan } from './plan.js';
+import { lockfileName, pmExecArgv, pmScriptArgv, resolvePackageManager, type PackageManager } from './package-manager.js';
+import { type PlanOptions } from './plan.js';
 import { probeProject, readManifestDependencies, readWorkspaceDependencies, type ProjectFacts } from './project.js';
-import { crossModeWarning, orientLine } from './mode.js';
 import { foldBinLeader, leaderForBin } from './native.js';
-import { detectProjectMode, hostPlatform } from './native-deps.js';
-import { allowHosts, allowHostsLocal, projectRegistryHints } from './registry.js';
+import { allowHosts } from './registry.js';
 import { type AdvisoryHit, type AdvisorySeverityCounts, highestSeverity } from './advisory.js';
 import { blockExit, deprecatedHints, nothingToCheck, type ActivePolicy } from './gates.js';
 import { runPreflight, suggestPins, type PinSuggestion, type PreflightPolicy, type PreflightResult } from './preflight.js';
@@ -40,66 +35,32 @@ import { scanSecrets, type SecretFinding } from './secrets.js';
 import { formatSafeReceipt, freshSubstitutions, incidentallyPinned, rewriteAddArgs, type Substitution } from './safe-install.js';
 import { applyUpgrades, classifyUpgrades, defaultNcuRunner, mergeProposals, NCU_SPEC, ncuPasses, parseUpgrades, readDeclaredRanges, renderUpgradeTable, upgradeTargets, type NcuRunner, type ProposedUpgrade, type UpgradePolicy, type UpgradeTarget } from './upgrade.js';
 import { execPackageTargets, parseLockfilePackages, parsePackageTargets, planRiskHintLog, riskTargetsForInstall, riskTargetsForUpdate, type LockfilePackage, type ReleaseAgeViolation, type RiskHint, type RiskTarget } from './risk.js';
-import { canPromptInteractively, nextPlanForBlockedEgressChoice, promptForBlockedEgress } from './interactive.js';
-import { backendDownGuidance, runSetup } from './setup.js';
+import { runSetup } from './setup.js';
 import { makeCanary } from './canary.js';
-import { networkPolicy } from './network.js';
 import { demoPlan, runDemo, type DemoRunner } from './demo.js';
 import { buildHostSuffixes } from './hosts.js';
 import { disabledByEnv, refreshUpdateCache, scheduleUpdateCheck, selfVersion, updateBanner } from './update-check.js';
-import { renderSandboxRetry } from './retry.js';
 import type { ContainerBackend } from './backend.js';
+import { fail } from './fail.js';
+import type { Globals } from './globals.js';
+import { resolvedFrozen, routeToHostArgv, runWrite, type WriteContext } from './write.js';
 
-interface Globals {
-  config?: string;
-  image?: string;
-  backend: 'docker' | 'podman';
-  json: boolean;
-  format?: 'human' | 'json' | 'agent';
-  frozen: boolean;
-  dev: boolean;
-  failOnEgress: boolean;
-  failOnSourceWrites: boolean;
-  failOnRisk?: boolean;
-  fullNetwork: boolean;
-  risk?: 'off' | 'basic' | 'thorough';
-  envNames: string[];
-  envFiles: string[];
-  dryRun: boolean;
-  /** Release-age gate threshold in days (overrides config; 0 disables). */
-  minReleaseAge?: number;
-  /** Package-name patterns exempt from the release-age gate (merged with config). */
-  allowRecent: string[];
-  /** Gate the whole resolved tree from the lockfile, not just direct deps. */
-  deep: boolean;
-  /** Local TTY mode: prompt before widening the boundary after a block. */
-  interactive: boolean;
-  /** Block on a known-malware advisory (overrides config). */
-  failOnAdvisory?: boolean;
-  /** Allow installing a maintainer-deprecated version for this run (overrides the default block). */
-  failOnDeprecated?: boolean;
-  /** Plant canary honeytokens and watch egress for them (overrides install.canaries). */
-  canaries?: boolean;
-  /** Suppress the "new version available" notice for this run (--no-update-check). */
-  noUpdateCheck: boolean;
-  /** Widen egress to the curated native-build/release hosts for this run (--allow-build-hosts). */
-  allowBuildHosts: boolean;
-  /** Approve every ignored dependency build script without prompting (--allow-all-builds). */
-  allowAllBuilds: boolean;
-}
-
-const JSON_SAFE_ENV = new Set(['SANDBOX', 'CI', 'HOME', 'SSH_AUTH_SOCK', 'HOST']);
-
-const HELP = `sandbox: supply-chain gates first, container when you want the boundary
+const HELP = `sandbox: supply-chain gates first, native by default, container when you want the boundary
 
 Usage: sandbox [globals] <command> [args]
 
 Quick start:
-  sandbox check zod           review a package before you add it
-  sandbox install             vet, then install natively with the detected package manager
-  sandbox add zod             vet, then add a dependency natively with the detected package manager
-  sandbox update              vet, then update dependencies natively with the detected package manager
+  sandbox check zod           review a package before you add it (no install, no Docker)
+  sandbox install             vet, then install (native, or contained if the tree already is)
+  sandbox add zod             vet, then add a dependency (mode-aware: native or contained)
+  sandbox update              vet, then update dependencies (mode-aware: native or contained)
+  sandbox pnpm add zod        vet, then ALWAYS install in a throwaway container (the boundary, on demand)
   sandbox devcontainer init   keep your editor + agent inside the container for the full session
+
+Install mode: a contained (Linux) node_modules keeps getting contained installs; a host-native or
+fresh project installs natively, so your IDE and tools just work. The gates run either way. The
+explicit \`sandbox <pm>\` form forces the container. Native install runs lifecycle scripts on the
+host, so it is heuristic gates, not the boundary; the container is the boundary.
 
 Common project commands:
   sandbox dev                 auto-detect PM, run dev/start/serve with full network + dev ports
@@ -107,9 +68,9 @@ Common project commands:
   sandbox script build        run a specific package.json script, even if it collides with a sandbox command
   sandbox setup --vibe        one-button setup for vibe/dev work
 
-Expert: per-PM binaries (same native path, shorter keystrokes)
+Expert: per-PM binaries (same mode-aware path, shorter keystrokes)
   New here? Use \`sandbox add\` / \`sandbox install\` above. These are for muscle memory only:
-  sandbox-pnpm add zod         vet with the gate engine, then run \`pnpm add\` natively on the host.
+  sandbox-pnpm add zod         vet with the gate engine, then install mode-aware (native or contained).
   (short alias: spnpm)         Same for npm/yarn/bun. Use explicit \`sandbox <pm>\` when you WANT the
                                throwaway container boundary. Your real \`pnpm\` is never touched.
   sandbox-npm/snpm · sandbox-yarn/syarn · sandbox-bun/sbun · sandbox-npx/snpx · sandbox-bunx/sbunx
@@ -337,11 +298,6 @@ function parse(argv: string[]): { globals: Globals; cmd?: string; args: string[]
   return { globals, cmd: argv[i], args: argv.slice(i + 1) };
 }
 
-function fail(msg: string): never {
-  console.error(`sandbox: ${msg}`);
-  process.exit(1);
-}
-
 /**
  * The reporter the CLI hands the backend for the one-time image build: a clack spinner on a TTY
  * (drawn on stderr so stdout — JSON/plan/container output — stays clean), and plain stderr lines in
@@ -356,15 +312,6 @@ function ttyBuildReporter(): BuildReporter {
     succeed: (m) => { if (active) { s.stop(m); active = false; } },
     fail: (m) => { if (active) { s.error(m); active = false; } },
   });
-}
-
-function redactPlanEnv(plan: RunPlan): RunPlan {
-  return {
-    ...plan,
-    env: Object.fromEntries(
-      Object.entries(plan.env).map(([key, value]) => [key, JSON_SAFE_ENV.has(key) ? value : '[redacted]']),
-    ),
-  };
 }
 
 /**
@@ -425,41 +372,12 @@ function config_off_reason(): string {
  * The exact command to run on the host when containment is off. A pass-through leader
  * (`sandbox npm ci`, `sandbox pnpm add zod`, `sandbox npx vite`) runs VERBATIM — truest to "as if
  * sandbox weren't in front of it", preserving `ci`/flags and the host's own package manager. A
- * sandbox shorthand (`dev`, `test`, `install`, `add`, `remove`, `x`, …) uses its resolved argv.
+ * sandbox shorthand (`dev`, `test`, `install`, `add`, `remove`, `x`, …) uses its resolved argv, honouring
+ * `--frozen` (reproducible argv) so `SANDBOX_OFF=1 sandbox --frozen install` matches the contained path.
  */
-function hostCommandFor(cmd: string, args: string[], route: Route): string[] {
+function hostCommandFor(cmd: string, args: string[], route: Route, frozen: boolean, yarnBerry: boolean): string[] {
   if (routePassthrough([cmd, ...args])) return [cmd, ...args];
-  switch (route.model) {
-    case 'install': return pmArgv(route.pm, 'install', route.args);
-    case 'add': return pmArgv(route.pm, 'add', route.pkgs);
-    case 'remove': return pmArgv(route.pm, 'remove', route.pkgs);
-    case 'update': return pmUpdateArgv(route.pm, route.verb, route.args);
-    case 'auditFix': return pmAuditFixArgv(route.pm, route.fixToken, route.args);
-    case 'auditSignatures': return pmAuditSignaturesArgv(route.pm, route.args);
-    case 'audit':
-    case 'run': return route.argv;
-  }
-}
-
-/**
- * After a contained run throws (usually a cryptic "failed to build" plus a raw daemon error), work out
- * whether the real cause is the container runtime being missing or its daemon being down — the most
- * common first-run faceplant — and return the same friendly guidance `doctor`/`setup` give. Returns
- * undefined when the backend looks healthy, so an unrelated error surfaces unchanged. Probes only on
- * the failure path, so a healthy run pays nothing.
- */
-async function explainBackendDown(bin: string, backend: 'docker' | 'podman'): Promise<string[] | undefined> {
-  const installed = (await quiet(bin, ['--version'])) === 0;
-  const daemonUp = installed && (await quiet(bin, ['info'])) === 0;
-  return backendDownGuidance({ installed, daemonUp }, backend);
-}
-
-/** A frozen install needs a committed lockfile for the (possibly explicitly-named) pm. */
-function requireLockfileForFrozen(facts: ProjectFacts, frozen: boolean): void {
-  if (frozen && !facts.hasLockfile) {
-    const lf = lockfileName(facts.pm);
-    fail(`reproducible install needs a committed ${lf}, run \`sandbox ${facts.pm} install <pkg>\` to create one, or drop --frozen`);
-  }
+  return routeToHostArgv(route, { frozen, yarnBerry });
 }
 
 /**
@@ -556,44 +474,6 @@ function checkRouteFor(args: string[], facts: ProjectFacts, invocationCwd: strin
     return resolveCommand(args[0], args.slice(1), facts);
   }
   return { model: 'add', pm: facts.pm, pkgs: args };
-}
-
-/**
- * Turn a {@link Route} into a plan. install/add honour the pm the user actually typed
- * (`sandbox pnpm add zod` stays pnpm regardless of the lockfile probe); run executes the
- * command verbatim. The frozen-needs-a-lockfile invariant lives here, the one planning seam.
- */
-function planForRoute(route: Route, config: SandboxConfig, facts: ProjectFacts, opts: PlanOptions): RunPlan {
-  switch (route.model) {
-    case 'install': {
-      const f = { ...facts, pm: route.pm };
-      const frozen = route.frozen || (opts.frozen ?? config.install.frozen);
-      requireLockfileForFrozen(f, frozen);
-      return planInstall(config, f, route.args, { ...opts, frozen });
-    }
-    case 'add':
-      return planAdd(config, { ...facts, pm: route.pm }, route.pkgs, opts);
-    case 'remove':
-      return planRemove(config, { ...facts, pm: route.pm }, route.pkgs, opts);
-    case 'update':
-      return planUpdate(config, { ...facts, pm: route.pm }, pmUpdateArgv(route.pm, route.verb, route.args), opts);
-    case 'auditFix':
-      return planAuditFix(config, { ...facts, pm: route.pm }, pmAuditFixArgv(route.pm, route.fixToken, route.args), opts);
-    case 'audit':
-      return planAudit(config, facts, route.argv, opts);
-    case 'auditSignatures':
-      return planAuditSignatures(config, { ...facts, pm: route.pm }, pmAuditSignaturesArgv(route.pm, route.args), opts);
-    case 'run': {
-      // `sandbox x` / `sandbox npx` / `pnpm dlx` can FETCH a package as a fallback, so the runner
-      // wants the install-class network defaults (registry-only allowlist), not the generic run
-      // default of network:none. Local bins still work fine through the same path.
-      if (execPackageTargets(route.argv).length) {
-        const runnerCfg = { ...config, run: { ...config.run, network: config.install.network, devPorts: false, ports: [] } };
-        return planRun(runnerCfg, facts, route.argv, opts);
-      }
-      return planRun(config, facts, route.argv, opts);
-    }
-  }
 }
 
 /**
@@ -1308,7 +1188,7 @@ async function runUpgradeCommand(
   config: SandboxConfig,
   facts: ProjectFacts,
   args: string[],
-  installContained: () => Promise<number>,
+  runInstall: () => Promise<number>,
   ncu: NcuRunner = defaultNcuRunner(),
 ): Promise<number> {
   const ua = parseUpgradeArgs(args);
@@ -1387,7 +1267,7 @@ async function runUpgradeCommand(
   }
 
   if (!ua.yes && process.stdout.isTTY) {
-    const ok = await confirm({ message: `Write these ${rows.length} upgrade(s) to package.json and install in the sandbox?` });
+    const ok = await confirm({ message: `Write these ${rows.length} upgrade(s) to package.json and install to refresh the lockfile?` });
     if (isCancel(ok) || !ok) {
       log.info('upgrade: cancelled, package.json untouched');
       return 0;
@@ -1403,8 +1283,8 @@ async function runUpgradeCommand(
     log.error(`upgrade: couldn't write package.json (${e instanceof Error ? e.message : String(e)}); nothing changed`);
     return 1;
   }
-  log.info(`upgrade: package.json updated (${rows.length} dep(s)); installing in the sandbox to refresh the lockfile …`);
-  return installContained();
+  log.info(`upgrade: package.json updated (${rows.length} dep(s)); installing to refresh the lockfile …`);
+  return runInstall();
 }
 
 /**
@@ -1706,92 +1586,9 @@ async function main(): Promise<number> {
   if (globals.image) opts.image = globals.image;
   if (globals.frozen) opts.frozen = true;
 
-  const emit = async (initialPlan: RunPlan): Promise<number> => {
-    let plan = initialPlan;
-    if (globals.dryRun) {
-      console.log(renderPlanSummary(plan));
-      return 0;
-    }
-    if (globals.json) {
-      console.log(JSON.stringify(redactPlanEnv(plan), null, 2));
-      return 0;
-    }
-    const canPrompt = canPromptInteractively(globals.interactive);
-    if (globals.interactive && !canPrompt) log.info('--interactive requested, but no TTY is attached, continuing non-interactively');
-    // The project's own registry hosts (from .npmrc) so the prompt can label them as expected.
-    const registryHosts = projectRegistryHints(context.rootDir).hosts;
-    // Canaries only do anything where there's an egress proxy log to watch (allowlist mode); plant
-    // them once and reuse across retries so the same honeytokens persist if we widen + re-run.
-    const wantCanaries = globals.canaries ?? config.install.canaries;
-    const canary = wantCanaries && networkPolicy(plan.network).useEgressProxy ? makeCanary() : undefined;
-    if (wantCanaries && !canary) log.info(`canaries requested but inactive here, they need allowlist egress (the proxy that watches for leaked tokens); this phase runs network '${plan.network}'`);
-    let buildApprovalTries = 0;
-    for (;;) {
-      let result: ExecuteResult;
-      try {
-        result = await execute(plan, backend, { failOnEgress: globals.failOnEgress, failOnSourceWrites: globals.failOnSourceWrites || config.install.failOnSourceWrites, ...(canary ? { canary } : {}) });
-      } catch (e) {
-        // Turn a cryptic build/run failure into the friendly "is Docker running?" guidance when that's
-        // the real cause; otherwise let the original error surface.
-        const hint = await explainBackendDown(backend.bin, globals.backend);
-        if (!hint) throw e;
-        const [problem, ...fixes] = hint;
-        log.error(problem!); // the cause carries the ✖
-        for (const line of fixes) log.info(line); // calm guidance, no alarm glyph
-        return 1;
-      }
-      // pnpm refuses unknown dependency build scripts, records them under `allowBuilds:` in
-      // pnpm-workspace.yaml as undecided, and exits non-zero. Resolve that here so the user never
-      // hand-edits YAML: prompt on a TTY, auto-approve with --allow-all-builds, else print the
-      // one-liner — then re-run so the approved scripts actually build.
-      if (facts.pm === 'pnpm' && classifyCommand(plan.argv) !== 'other' && buildApprovalTries < 3) {
-        const pending = findPendingBuilds(context.rootDir);
-        if (pending.length) {
-          buildApprovalTries++;
-          if (globals.allowAllBuilds) {
-            const r = writeBuildApprovals(context.rootDir, new Map(pending.map((n) => [n, true])));
-            log.info(`approved build scripts (contained in the sandbox): ${r.allowed.join(', ')}; re-running install`);
-            continue;
-          }
-          const ttyPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !globals.json && !globals.dryRun;
-          if (ttyPrompt) {
-            const decisions = await promptBuildApprovals(pending);
-            if (decisions) {
-              const r = writeBuildApprovals(context.rootDir, decisions);
-              const parts = [r.allowed.length ? `allowed ${r.allowed.join(', ')}` : '', r.denied.length ? `denied ${r.denied.join(', ')}` : ''].filter(Boolean);
-              log.info(`updated pnpm-workspace.yaml (${parts.join('; ')}), re-running install`);
-              continue;
-            }
-          }
-          log.warn(`${pending.length} package(s) want to run install scripts but aren't approved yet: ${pending.join(', ')}`);
-          log.info(`approve (contained in the sandbox) and re-install:  ${renderApproveBuildsCommand(pending)}`);
-          log.info(`or approve all without prompting:  ${renderSandboxRetry('--allow-all-builds', cmd, args)}`);
-          return result.code === 0 ? 1 : result.code;
-        }
-      }
-      if (!result.deniedHosts.length || !canPrompt) {
-        // One calm, confident close after a clean dependency op: make the invisible protection legible
-        // once. Only for install-class commands that succeeded — a dev server or a failed run says its
-        // own thing. `classifyCommand` returns 'other' for run/scripts, so those stay quiet.
-        const successNote = containedSuccessLine(result.code, plan.argv);
-        if (successNote) log.info(successNote);
-        return result.code;
-      }
-      const deniedHosts = [...new Set(result.deniedHosts)].sort();
-      const choice = await promptForBlockedEgress(deniedHosts, { registryHosts });
-      if (choice === 'cancel') return 1;
-      if (choice === 'allow-project') {
-        const r = allowHosts(context.rootDir, deniedHosts, context.configPath);
-        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (team); retrying`);
-      } else if (choice === 'allow-local') {
-        const r = allowHostsLocal(context.rootDir, deniedHosts, context.configPath);
-        log.info(`saved ${(r.added.length ? r.added : deniedHosts).join(', ')} to ${path.basename(r.file)} (personal, git-ignored); retrying`);
-      }
-      const retry = nextPlanForBlockedEgressChoice(plan, deniedHosts, choice);
-      if (!retry) return result.code;
-      plan = retry;
-    }
-  };
+  // Everything the write/install orchestration (src/write.ts) needs, bundled once. The write path lives
+  // outside this self-executing module so it can be unit-tested with a fake backend.
+  const writeCtx: WriteContext = { config, facts, opts, globals, project: context, backend, cmd, args, binLeader };
 
   if (cmd === 'approve-builds') {
     // Resolve pnpm's ignored dependency build scripts without hand-editing YAML. With no package
@@ -1812,7 +1609,9 @@ async function main(): Promise<number> {
     log.info(`${deny ? 'denied' : 'approved'} build scripts: ${(deny ? r.denied : r.allowed).join(', ')}`);
     if (deny) return 0;
     log.info('re-running install so the approved scripts build');
-    return emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
+    // Re-install through the mode-aware path so a host-native project rebuilds natively (a contained
+    // reinstall would clobber its tree with a Linux one), and a container project stays contained.
+    return runWrite(writeCtx, { model: 'install', pm: facts.pm, frozen: false, args: [] });
   }
 
   if (cmd === 'delta') {
@@ -1820,9 +1619,10 @@ async function main(): Promise<number> {
   }
 
   if (cmd === 'upgrade') {
-    // On --write, install the rewritten package.json through the jailed install path.
-    const installContained = () => emit(planForRoute({ model: 'install', pm: facts.pm, frozen: false, args: [] }, config, facts, opts));
-    return runUpgradeCommand(globals, config, facts, args, installContained);
+    // On --write, install the rewritten package.json through the same mode-aware write path as
+    // `sandbox install` (native on a host-native or fresh project, contained when the tree already is).
+    const runInstall = () => runWrite(writeCtx, { model: 'install', pm: facts.pm, frozen: false, args: [] });
+    return runUpgradeCommand(globals, config, facts, args, runInstall);
   }
 
   if (cmd === 'check') {
@@ -1847,7 +1647,7 @@ async function main(): Promise<number> {
   // Containment off (config `off:true` or SANDBOX_OFF) → run the operation straight on the host, as if
   // `sandbox` weren't in front of it. Checked before global-install guard/gates: off means off.
   if (sandboxOff(config)) {
-    return runOnHost(hostCommandFor(cmd, args, route), facts.cwd, globals);
+    return runOnHost(hostCommandFor(cmd, args, route, resolvedFrozen(route, opts, config), facts.isYarnBerry), facts.cwd, globals);
   }
   // A global install is host tooling — running it in an ephemeral container installs nothing on the
   // host, so refuse with guidance rather than silently no-op (the path wrappers also pass these through).
@@ -1858,33 +1658,13 @@ async function main(): Promise<number> {
   }
   const outcome = await preflightRoute(globals, config, facts, route);
   if ('block' in outcome) return outcome.block;
-  // Skipped for --json/--dry-run previews (no side effect to orient or guard).
-  const writePm = !globals.json && !globals.dryRun ? containerWritePm(outcome.route) : undefined;
-  if (writePm) {
-    const host = hostPlatform();
-    const mode = detectProjectMode(facts.cwd, host);
-    // One orienting line before any contained write: package manager, project mode, containment. One
-    // line, always, so the write says what it's doing without narrating the boundary on later lines.
-    log.info(orientLine({ pm: writePm, mode, contained: true }));
-    // Louder, only when it matters: a contained install rebuilds node_modules as a Linux tree, so when
-    // the project already has a host-native (local) tree, warn before clobbering it and (on a TTY) let
-    // the user confirm the switch. `host-native` IS the cross-mode case (non-Linux host with host-native
-    // binaries present), so the mode we already detected is the trigger; crossModeWarning owns the copy.
-    if (mode === 'host-native') {
-      const warning = crossModeWarning({ hostOs: host.os, hostNativeCount: () => 1, pm: writePm });
-      if (warning) {
-        log.warn(warning);
-        if (process.stdin.isTTY && process.stdout.isTTY) {
-          const ok = await confirm({ message: 'Switch this project to container-built node_modules now?' });
-          if (isCancel(ok) || !ok) {
-            log.info('Kept this project on host-native deps. Nothing was installed. Use a plain host install to stay local.');
-            return 0;
-          }
-        }
-      }
-    }
-  }
-  return emit(planForRoute(outcome.route, config, facts, opts));
+
+  // A tree-mutating install goes through the mode-aware write path (native vs container by project mode,
+  // shared with approve-builds and upgrade --write). Everything else (run, audit, read-only) has no tree
+  // to place, so it runs contained as before.
+  // The write path (native vs container by mode), the read-only/run paths (contained), the build-approval
+  // loop, and the egress prompt all live in src/write.ts behind one entry. cli stays the wiring layer.
+  return runWrite(writeCtx, outcome.route);
 }
 
 main()

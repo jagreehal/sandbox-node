@@ -87,12 +87,33 @@ function projectModeShort(mode: ProjectMode): string {
   }
 }
 
+/** Where a tree-mutating install runs: natively on the host, or inside a throwaway container. */
+export type InstallTarget = 'native' | 'container';
+
 /**
- * The single orienting line printed before every install-class write: package manager, current project
- * mode, and containment status, in one terse clause (`pnpm · container-built deps · contained`). One
- * line, always, so a write says what it's doing in one place without narrating the boundary on every
- * following line. Findings stay loud; this stays quiet.
+ * Where a tree-mutating install should run, given the project's current mode and whether the user
+ * forced the container. One mode per project: a `container-built` tree keeps getting contained installs
+ * (so its Linux tree stays coherent); every other mode (`host-native`, fresh `no-deps`, or
+ * `deps-without-native-signal`) installs natively, so the host IDE and tools load the result and a
+ * fresh project gets the best DX. `forceContainer` always wins: typing the explicit `sandbox <pm>` form
+ * is an explicit ask for the boundary, regardless of the detected mode. Pure so cli.ts stays thin.
  */
-export function orientLine(input: { pm: PackageManager; mode: ProjectMode; contained: boolean }): string {
-  return `${input.pm} · ${projectModeShort(input.mode)} · ${input.contained ? 'contained' : 'containment off'}`;
+export function chooseInstallTarget(mode: ProjectMode, forceContainer: boolean): InstallTarget {
+  if (forceContainer) return 'container';
+  return mode === 'container-built' ? 'container' : 'native';
+}
+
+/**
+ * The single action line printed before a tree-mutating write: the operation verb and where it runs,
+ * the package manager, the current project mode, and the one plain reason that matters. `verb` is the
+ * present-progressive operation ("installing", "removing", …) so a `remove` doesn't announce an install.
+ * Native states the honest line (the gates ran, but a native install runs lifecycle scripts on the host,
+ * so it's heuristic, not the container boundary); container names what the boundary buys. One line,
+ * action + why, so the write says what it's doing in one place without narrating containment afterward.
+ */
+export function writeActionLine(input: { verb: string; pm: PackageManager; mode: ProjectMode; target: InstallTarget }): string {
+  if (input.target === 'native') {
+    return `${input.verb} natively on the host with ${input.pm} (${projectModeShort(input.mode)}; gates ran, no container boundary)`;
+  }
+  return `${input.verb} in a throwaway container with ${input.pm} (${projectModeShort(input.mode)}; no host creds, default-deny egress)`;
 }

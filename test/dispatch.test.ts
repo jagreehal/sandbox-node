@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containerWritePm, effectivePm, isGlobalInstall, routePassthrough, unwrapSelfInvocation, type Route } from '../src/dispatch.js';
+import { effectivePm, isGlobalInstall, modeAwareWritePm, routePassthrough, unwrapSelfInvocation, writeVerb, type Route } from '../src/dispatch.js';
 
 const route = (cmd: string): Route | undefined => routePassthrough(cmd.split(' ').filter(Boolean));
 
@@ -246,16 +246,27 @@ describe('effectivePm', () => {
   });
 });
 
-describe('containerWritePm', () => {
-  it('reports the pm whose contained install rebuilds node_modules', () => {
-    expect(containerWritePm(route('npm install')!)).toBe('npm');
-    expect(containerWritePm(route('pnpm add zod')!)).toBe('pnpm');
-    expect(containerWritePm(route('yarn upgrade')!)).toBe('yarn');
+describe('modeAwareWritePm', () => {
+  it('reports the pm for every tree-mutating install (install/add/update/remove)', () => {
+    expect(modeAwareWritePm(route('npm install')!)).toBe('npm');
+    expect(modeAwareWritePm(route('pnpm add zod')!)).toBe('pnpm');
+    expect(modeAwareWritePm(route('yarn upgrade')!)).toBe('yarn');
+    // remove rewrites node_modules too, so it stays in the project's one mode (unlike containerWritePm).
+    expect(modeAwareWritePm(route('npm uninstall lodash')!)).toBe('npm');
+    expect(modeAwareWritePm(route('pnpm remove zod')!)).toBe('pnpm');
   });
 
-  it('returns undefined for routes that write no new tree (remove / read-only audit, run)', () => {
-    expect(containerWritePm(route('npm uninstall lodash')!)).toBeUndefined();
-    expect(containerWritePm(route('npm audit')!)).toBeUndefined();
-    expect(containerWritePm(route('npm run build')!)).toBeUndefined();
+  it('returns undefined for read-only routes that touch no deps (audit, run)', () => {
+    expect(modeAwareWritePm(route('npm audit')!)).toBeUndefined();
+    expect(modeAwareWritePm(route('npm run build')!)).toBeUndefined();
+  });
+});
+
+describe('writeVerb', () => {
+  it('names the actual operation so the action line is honest (remove != install)', () => {
+    expect(writeVerb(route('npm install')!)).toBe('installing');
+    expect(writeVerb(route('pnpm add zod')!)).toBe('adding');
+    expect(writeVerb(route('npm update')!)).toBe('updating');
+    expect(writeVerb(route('npm uninstall lodash')!)).toBe('removing');
   });
 });

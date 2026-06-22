@@ -6,8 +6,9 @@ description: Human-in-the-loop secure install for npm/pnpm/yarn/bun deps, driven
 # sandbox-install
 
 The `sandbox` CLI ships a supply-chain review pass and a container boundary on demand. The
-everyday write path vets first, then installs natively on the host; explicit `sandbox <pm>` or a
-devcontainer add containment. This skill is the **interactive front-end**: the CLI is pure
+everyday write path vets first, then installs mode-aware (native on a host-native or fresh project,
+contained when the tree already is); explicit `sandbox <pm>` or a devcontainer always containerize.
+This skill is the **interactive front-end**: the CLI is pure
 flags, and you (the agent) are the human-in-the-loop. You drive the flags; the user makes the
 risk calls.
 
@@ -18,19 +19,24 @@ way (`sandbox check express lodash@4`); `preflight` is the same review keyed to 
 (`preflight npm install …`). Both accept the same gate flags below.
 
 **The write path leads with `sandbox install`, `sandbox add <pkg>`, `sandbox update`.** These are
-the commands to teach and use: each one vets with the gate engine, then runs the install natively
-on the host. sandbox auto-detects the project's package manager, so you do not name it. Before
-each write the CLI prints a one-line orient such as `pnpm · host-native deps · native` or
-`pnpm · container-built deps · contained`. The per-PM binaries (`spnpm`, `snpm`, …) are the same
-gated native path with shorter keystrokes; they live in the Expert section below.
+the commands to teach and use: each one vets with the gate engine, then installs mode-aware (native
+on a host-native or fresh project, contained when the tree already is). sandbox auto-detects the
+project's package manager, so you do not name it. Before each write the CLI prints one line saying
+what's about to happen and why, such as
+`installing natively on the host with pnpm (host-native deps; gates ran, no container boundary)` or
+`installing in a throwaway container with pnpm (container-built deps; no host creds, default-deny egress)`.
+A native install runs lifecycle scripts on the host, so the gates are heuristics, not a boundary; the
+container is the boundary. The per-PM binaries (`spnpm`, `snpm`, …) are the same mode-aware path with
+shorter keystrokes; they live in the Expert section below.
 
 ## Workflow
 
 1. **Confirm the tool is present.** `sandbox doctor` (or `npx @jagreehal/sandbox-node doctor`).
    If there's no `sandbox.config.json`, run `sandbox init --preset balanced` first. The write
    commands to teach are `sandbox install`, `sandbox add <pkg>`, and `sandbox update`: sandbox
-   detects the package manager from the project, vets the targets, then installs natively on the
-   host. Use explicit `sandbox <pm>` when the user wants the throwaway container boundary.
+   detects the package manager from the project, vets the targets, then installs mode-aware (native
+   on a host-native or fresh project, contained when the tree already is). Use explicit `sandbox <pm>`
+   when the user wants the throwaway container boundary.
 
    For scripts, prefer the short form: `sandbox dev`, `sandbox test`, `sandbox lint`. If a script
    name collides with a sandbox command such as `build`, use `sandbox script build`.
@@ -147,7 +153,7 @@ gated native path with shorter keystrokes; they live in the Expert section below
 - **Every override must be a real flag** the user approved; never silently relax the gate.
 - **Lead with `sandbox install` / `sandbox add` / `sandbox update`.** sandbox detects the package
   manager (npm/pnpm/yarn/bun) from the project, so you don't name it. The per-PM binaries
-  (`spnpm`, …) are an expert shortcut for the same gated native path.
+  (`spnpm`, …) are an expert shortcut for the same mode-aware path.
 - For `package.json` scripts, prefer `sandbox <script>` over `sandbox <pm> run <script>`, and use
   `sandbox script <name>` when the script name collides with a sandbox command.
 - Prefer the narrowest override (`--allow-recent <pkg>`) over the blanket one
@@ -158,12 +164,13 @@ gated native path with shorter keystrokes; they live in the Expert section below
 - Non-interactive / CI / "just set it up": skip the prompts and pick the strict default
   (abort on any finding) unless the user pre-stated their tolerance, then encode it as flags.
 
-## Expert: per-PM binaries (same gated native path, shorter keystrokes)
+## Expert: per-PM binaries (same mode-aware path, shorter keystrokes)
 
 The default `sandbox install` / `add` / `update` commands cover everyone. For a human who lives in
-their package manager's muscle memory, the per-PM binaries take the same gated native path without the
+their package manager's muscle memory, the per-PM binaries take the same mode-aware path without the
 `sandbox` prefix or the auto-detect step: `sandbox-pnpm add zod` (short alias `spnpm add zod`) is the
-same keystrokes as `pnpm add zod`, but it vets with the gate engine and installs natively on the host.
+same keystrokes as `pnpm add zod`, but it vets with the gate engine and installs mode-aware (native on
+a host-native or fresh project, contained when the tree already is).
 Use explicit `sandbox <pm>` when you want the throwaway container boundary.
 
 - Binaries: `sandbox-npm`/`snpm`, `sandbox-pnpm`/`spnpm`, `sandbox-yarn`/`syarn`, `sandbox-bun`/`sbun`,

@@ -464,17 +464,21 @@ describe('cli (golden, no docker)', () => {
 
   it('--allow-build-hosts widens egress to the curated native-build hosts (still default-deny otherwise)', async () => {
     const dir = fixture({ 'package.json': '{"name":"x"}' });
-    const base = JSON.parse((await runCli(dir, ['--json', 'install'])).stdout);
+    // Force the container (explicit pm form) so the egress allowlist is part of the plan to inspect;
+    // the friendly `install` on a fresh project is mode-aware and would resolve to a native install.
+    const base = JSON.parse((await runCli(dir, ['--json', 'npm', 'install'])).stdout);
     expect(base.egressAllow).toEqual(['npmjs.org', 'npmjs.com']); // unchanged without the flag
-    const widened = JSON.parse((await runCli(dir, ['--json', '--allow-build-hosts', 'install'])).stdout);
+    const widened = JSON.parse((await runCli(dir, ['--json', '--allow-build-hosts', 'npm', 'install'])).stdout);
     expect(widened.network).toBe('allowlist'); // still an allowlist, NOT full network
     expect(widened.egressAllow).toEqual(expect.arrayContaining(['npmjs.org', 'nodejs.org', 'github.com', 'binaries.prisma.sh']));
     expect(widened.egressAllow).not.toContain('exfil.example.com');
   });
 
-  it('--json install: writable root, locked manifest + persistence paths', async () => {
+  it('--json install (forced container): writable root, locked manifest + persistence paths', async () => {
+    // Explicit pm form forces the container, so there is a container plan to inspect; the friendly
+    // `install` is mode-aware (see the native-install tests below).
     const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
-    const { code, stdout } = await runCli(dir, ['--json', 'install']);
+    const { code, stdout } = await runCli(dir, ['--json', 'npm', 'install']);
     expect(code).toBe(0);
     const plan = JSON.parse(stdout.replaceAll(dir, '<cwd>'));
     expect(plan.image).toMatch(/^node-install-sandbox:/);
@@ -496,14 +500,40 @@ describe('cli (golden, no docker)', () => {
     expect(plan.mounts).toContainEqual({ type: 'volume', target: '/workspace/.github', readonly: true });
   });
 
-  it('--json add leaves package.json writable and uses the add args', async () => {
+  it('--json add (forced container) leaves package.json writable and uses the add args', async () => {
     const dir = fixture({ 'pnpm-lock.yaml': '', 'package.json': '{"name":"x"}' });
-    const { code, stdout } = await runCli(dir, ['--json', 'add', 'is-number']);
+    const { code, stdout } = await runCli(dir, ['--json', 'pnpm', 'add', 'is-number']);
     expect(code).toBe(0);
     const plan = JSON.parse(stdout);
     expect(plan.argv).toEqual(['corepack', 'pnpm', 'add', '--save-exact', 'is-number']);
     expect(plan.mounts.find((m: { target: string }) => m.target === '/workspace/package.json')).toBeUndefined();
     expect(plan.mounts).toContainEqual({ type: 'volume', target: '/workspace/.github', readonly: true });
+  });
+
+  it('mode-aware: the friendly `install` on a fresh project resolves to a native host install', async () => {
+    // A fresh project (no node_modules) is not a container build, so the everyday `sandbox install`
+    // installs natively, so the host IDE and tools load the result. --json reports it honestly.
+    const dir = fixture({ 'package-lock.json': '{}', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'install']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ native: true, host: true, argv: ['npm', 'install'] });
+  });
+
+  it('mode-aware: the friendly `add` on a fresh project resolves to a native host install with pins intact', async () => {
+    const dir = fixture({ 'pnpm-lock.yaml': '', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'add', 'is-number']);
+    expect(code).toBe(0);
+    // Native carries the gate engine's safe-install pin (--save-exact), same as the contained path.
+    expect(JSON.parse(stdout)).toEqual({ native: true, host: true, argv: ['corepack', 'pnpm', 'add', '--save-exact', 'is-number'] });
+  });
+
+  it('mode-aware: `approve-builds` re-install follows the project mode (native on a fresh host-native project)', async () => {
+    // Regression: approve-builds must not hard-wire a contained reinstall. On a fresh/host-native pnpm
+    // project that would clobber the tree with a Linux one; the reinstall now takes the mode-aware path.
+    const dir = fixture({ 'pnpm-lock.yaml': '', 'package.json': '{"name":"x"}' });
+    const { code, stdout } = await runCli(dir, ['--json', 'approve-builds', 'esbuild']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ native: true, host: true, argv: ['corepack', 'pnpm', 'install'] });
   });
 
   it('--json run loads env files from the invocation directory but redacts their values', async () => {
@@ -773,7 +803,7 @@ describe('cli (golden, no docker)', () => {
     const { code, stdout } = await runCli(dir, ['init', '--preset', 'balanced']);
     expect(code).toBe(0);
     expect(stdout).toContain('project mode: no deps installed yet'); // mode is visible, not hidden in setup
-    expect(stdout).toMatch(/Tip: advanced: s(npm|pnpm|yarn|bun) add zod uses the same contained path/); // expert-only framing
+    expect(stdout).toMatch(/Tip: advanced: s(npm|pnpm|yarn|bun) add zod uses the same mode-aware path/); // expert-only framing
     expect(stdout).toContain('sandbox install'); // the beginner write path is still front-and-centre
   });
 
